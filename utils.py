@@ -61,3 +61,24 @@ def get_mat_for_type(data: pd.DataFrame, category_data: pd.DataFrame, inverse=Fa
 
     mat = idx * np.eye(len(data))
     return mat
+
+
+def quad_to_piecewise(a, b, c, p_min, p_max, num_segments):
+    """
+    Converts a quadratic generator cost function to a two segments piecewise linear approximation.
+    Args:
+    a (float): Coefficient of P^2 term in the quadratic cost function.
+    b (float): Coefficient of P term in the quadratic cost function.
+    c (float): Constant term in the quadratic cost function.
+    p_max (float): Maximum active power output.
+    p_max (float): Maximum active power output.
+    num_segments (int, optional): Number of linear segments (default=2).
+    Returns: A list of tuples, where each tuple contains the x, y of the piecewise linear breakpoints
+    """
+    def quad_cost(a, b, c, x):
+        return a * x ** 2 + b * x + c
+
+    x_breakpoints = [p_min + (p_max - p_min) * i / num_segments for i in range(num_segments + 1)]
+    y_breakpoints = [quad_cost(a, b, c, x) for x in x_breakpoints]
+
+    return tuple(zip(x_breakpoints, y_breakpoints))
