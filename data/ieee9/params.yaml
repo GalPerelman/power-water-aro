@@ -1,0 +1,16 @@
+name: "ieee9"
+input_power_units: "mw"
+nominal_voltage_kv: 345
+power_base_mva: 100
+active_demand_factor: 1
+reactive_demand_factor: 1
+coords:
+  0: [6, 0]
+  1: [12, 6]
+  2: [0, 6]
+  3: [6, 2]
+  4: [4, 4]
+  5: [2, 6]
+  6: [6, 6]
+  7: [10, 6]
+  8: [8, 4]
