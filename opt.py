@@ -1,8 +1,10 @@
 import numpy as np
 import cvxpy as cp
+import simpy as sp
+import scipy
 
 import utils
-
+import uncertainty
 
 class BaseOptModel:
     def __init__(self, pds, wds, t, omega=None, pw_segments=None, solver_params=None, solver_display=False):
@@ -282,6 +284,22 @@ class BaseOptModel:
         self.ineq_mat["mass_balance"] = mat
         self.ineq_rhs["mass_balance"] = rhs
 
+    def get_variables_to_eliminate(self, method='qr'):
+        if method == 'rref':
+            echelon, indep_idx = sp.Matrix(self.eq_mat).rref()
+            dep_idx = np.setxor1d(np.arange(self.eq_mat.shape[1]), indep_idx)
+
+        else:
+            q, r, p = scipy.linalg.qr(self.eq_mat, pivoting=True)
+            tol = 1e-10  # tolerance for detecting non-zero entries
+            rank = np.sum(np.abs(np.diag(r)) > tol)
+            independent_columns_indices = p[:rank]
+            indep_idx = independent_columns_indices
+            dep_idx = np.setxor1d(np.arange(self.eq_mat.shape[1]), indep_idx)
+
+        indep_idx, dep_idx = sorted(list(indep_idx)), sorted(list(dep_idx))
+        return indep_idx, dep_idx
+
     def solve(self):
         self.model = cp.Problem(cp.Minimize(self.piecewise_costs @ self.x), self.constraints)
         self.model.solve(solver=cp.GUROBI, reoptimize=True)
@@ -328,3 +346,51 @@ class StandardDCPF(BaseOptModel):
         self.constraints.append(self.eq_mat @ self.x == self.eq_rhs)
         for (name_mat, mat), (name_rhs, rhs) in zip(self.ineq_mat.items(), self.ineq_rhs.items()):
             self.constraints.append(mat @ self.x <= rhs)
+
+
+class RODCPF(BaseOptModel):
+    """
+    variables are dependent on the equality constraints RHS
+    x_indep = (A_indep)^-1 * (b - A_dep) * x_dep
+
+    Therefore, before decalring x, the RHS is updated to include uncertainty
+    """
+    def __init__(self, pds, wds, t, omega, pw_segments=None, solver_params=None, solver_display=False):
+        super().__init__(pds, wds, t, omega, pw_segments, solver_params, solver_display)
+
+        self.indep_idx, self.dep_idx = self.get_variables_to_eliminate(method='qr')
+        self.delta = uncertainty.affine_mat(self.pds, self.wds, self.t)
+        self.uncertain_rhs = self.add_rhs_uncertainty()
+
+        self.lb, self.ub = self.get_x_bounds()
+        self.x = self.declare_variables()
+        self.formulate()
+
+    def add_rhs_uncertainty(self):
+        k = self.n_bus * self.t  # number of bus power balance constraints
+        load_norm_terms = [self.omega * cp.norm(self.delta[i], 2) for i in range(k)]
+        pv_norm_terms = [self.omega * cp.norm(self.delta[i + k], 2) for i in range(k)]
+
+        stacked_rhs = cp.vstack([self.eq_rhs[i] + load_norm_terms[i] - pv_norm_terms[i] for i in range(k)])
+        stacked_rhs = cp.vstack([stacked_rhs, np.zeros((self.t, 1))])  # add zeros for the ref bus = 0 constraints
+        uncertain_rhs = cp.reshape(stacked_rhs, (self.eq_rhs.shape[0],))
+        return uncertain_rhs
+
+    def declare_variables(self):
+        _x = cp.Variable(len(self.dep_idx))
+        # extend _x to an expression includes all the decision variables (dependent and independent)
+        p1 = np.zeros((self.eq_mat.shape[1], len(self.indep_idx)))
+        p1[self.indep_idx, :] = np.eye(len(self.indep_idx))
+        p2 = np.zeros((self.eq_mat.shape[1], len(self.dep_idx)))
+        p2[self.dep_idx, :] = np.eye(len(self.dep_idx))
+        x = (p1 @ np.linalg.pinv(self.eq_mat[:, self.indep_idx])
+                  @ (self.uncertain_rhs - self.eq_mat[:, self.dep_idx] @ _x) + p2 @ _x)
+
+        self.constraints += [x <= self.ub, x >= self.lb]
+        return x
+
+    def formulate(self):
+        for (name_mat, mat), (name_rhs, rhs) in zip(self.ineq_mat.items(), self.ineq_rhs.items()):
+            self.constraints.append(mat @ self.x <= rhs)
+
+
