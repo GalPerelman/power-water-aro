@@ -52,18 +52,18 @@ class BaseOptModel:
         ]
         """
         # preparing batteries columns
-        bat_columns = utils.get_mat_for_type(self.pds.bus, self.pds.batteries)
-        bat_columns = bat_columns[:, np.any(bat_columns, axis=0)]
+        bat_cols = utils.get_mat_for_type(self.pds.bus, self.pds.batteries)
+        bat_cols = bat_cols[:, np.any(bat_cols, axis=0)]
         charge_eff = self.pds.bus["charge_eff"].values.reshape(-1, 1)
-        bat_charge_cols = np.divide(bat_columns, charge_eff, out=np.full_like(bat_columns, 0, dtype=float),
+        bat_charge_cols = np.divide(bat_cols, charge_eff, out=np.full_like(bat_cols, 0, dtype=float),
                                     where=charge_eff != 0)
         bat_charge_cols[np.abs(bat_charge_cols) < 10 ** -6] = 0
 
         discharge_eff = self.pds.bus["discharge_eff"].values.reshape(-1, 1)
-        bat_discharge_cols = np.multiply(bat_columns, discharge_eff)
+        bat_discharge_cols = np.multiply(bat_cols, discharge_eff)
         bat_discharge_cols[np.abs(bat_discharge_cols) < 10 ** -6] = 0
 
-        # preparing wds links columns
+        # preparing pds-wds links columns
         pumps_power, desal_power = self.construct_wds_pds_links()
 
         mat = np.zeros((self.n_bus * self.t + self.t + self.n_tanks * self.t, self.n_tot * self.t + self.n_pw_vars))
