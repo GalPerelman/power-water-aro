@@ -25,8 +25,8 @@ class BaseOptModel:
 
         # total number of variables per time step (not including piecewise linear)
         # batteries have 2 variables (charging and discharging)
-        self.n_pds, self.n_wds = self.n_bus + self.n_gen + 2 * self.n_bat, self.n_combs + self.n_desal
-        self.n_tot = self.n_bus + self.n_gen + 2 * self.n_bat + self.n_combs + self.n_desal
+        self.n_pds, self.n_wds = self.n_bus + self.n_gen + 2 * self.n_bat, self.n_combs + self.n_desal + self.n_tanks
+        self.n_tot = self.n_bus + self.n_gen + 2 * self.n_bat + self.n_combs + self.n_desal + self.n_tanks
         self.w = 0 if self.pw_segments is None else self.pw_segments + 1  # number of segments edges
 
         # piecewise variables
@@ -66,7 +66,7 @@ class BaseOptModel:
         # preparing wds links columns
         pumps_power, desal_power = self.construct_wds_pds_links()
 
-        mat = np.zeros((self.pds.n_bus * self.t + self.t, self.n_tot * self.t + self.n_pw_vars))
+        mat = np.zeros((self.n_bus * self.t + self.t + self.n_tanks * self.t, self.n_tot * self.t + self.n_pw_vars))
         for t in range(self.t):
             mat[self.n_bus * t: self.n_bus * (t + 1), self.n_tot * t: self.n_tot * t + self.n_bus] = self.pds.y
 
@@ -90,17 +90,37 @@ class BaseOptModel:
 
             # desalination variables inside power balance (with desalination power consumption)
             mat[self.n_bus * t: self.n_bus * (t + 1),
-                self.n_tot * t + (self.n_pds + self.n_combs): self.n_tot * (t + 1)] = -1 * desal_power
+                self.n_tot * t + (self.n_pds + self.n_combs):
+                self.n_tot * t + (self.n_pds + self.n_combs) + self.n_desal] = -1 * desal_power
 
             # bus 0 angle == 0 for every time step
             mat[self.pds.n_bus * self.t + t, self.n_tot * t] = 1
+
+        # water balance
+        start_row = self.n_bus * self.t + self.t
+        for tank_idx, (tank_name, tank_data) in enumerate(self.wds.tanks.iterrows()):
+            for t in range(self.t):
+                r = start_row + tank_idx + self.n_tanks * t
+                for comb_idx, comb_data in self.wds.combs.iterrows():
+                    col = self.n_tot * t + self.n_pds + comb_idx
+                    if comb_data['to'] == tank_name:
+                        mat[r, col] = comb_data['flow']
+                    if comb_data['from'] == tank_name:
+                        mat[r, col] = -comb_data['flow']
+
+                for desal_idx, desal_data in self.wds.desal.iterrows():
+                    if desal_data['to'] == tank_name:
+                        col = self.n_tot * t + self.n_pds + self.n_combs + desal_idx
+                        mat[r, col] = 1
+
+                mat[r, self.n_tot * t + self.n_pds + self.n_combs + self.n_desal + tank_idx] = -1
 
         # constructing corresponding RHS
         loads = self.pds.dem_active.values[:, :self.t].flatten('F')
         injections = np.multiply(self.pds.bus['max_pv_pu'].values,
                                  self.pds.max_gen_profile.values[:, :self.t].T).T.flatten('F')
-
-        rhs = np.hstack([loads - injections, np.zeros(self.t)])  # add zeros for ref bust angles
+        demands = self.wds.demands.values[:self.t, :].flatten()
+        rhs = np.hstack([loads - injections, np.zeros(self.t), demands])  # add zeros for ref bust angles
         return mat, rhs
 
     def construct_wds_pds_links(self):
@@ -125,7 +145,8 @@ class BaseOptModel:
                        self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],  # batteries charge ub
                        self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],  # batteries discharge lb
                        np.tile(1, self.n_combs),  # upper bound for combs duration
-                       self.wds.desal['max_flow'].values  # desalination upper bound
+                       self.wds.desal['max_flow'].values,  # desalination upper bound
+                       np.tile(np.inf, self.n_tanks)  # tank inflows
                        ]), self.t)
         lb = np.tile(
             np.hstack([np.tile(-np.pi, self.n_bus),  # lower bound for bus angles
@@ -133,7 +154,8 @@ class BaseOptModel:
                        np.tile(0, self.n_bat),  # lower bound for batteries charge
                        np.tile(0, self.n_bat),  # lower bound for batteries discharge
                        np.tile(0, self.n_combs),  # lower bound for combs duration
-                       self.wds.desal['min_flow'].values  # desalination lower bound
+                       self.wds.desal['min_flow'].values,  # desalination lower bound
+                       np.tile(-np.inf, self.n_tanks)  # tank inflows
                        ]), self.t)
 
         if self.pw_segments is not None:
@@ -313,6 +335,7 @@ class BaseOptModel:
         bat_d = np.zeros((self.n_bat, self.t))
         pumps = np.zeros((self.n_combs, self.t))
         desal = np.zeros((self.n_desal, self.t))
+        tanks = np.zeros((self.n_tanks, self.t))
         w = np.zeros((self.n_pw_vars // self.t, self.t))
         for t in range(self.t):
             theta[:, t] = x[self.n_tot * t: self.n_tot * t + self.n_bus]
@@ -320,10 +343,12 @@ class BaseOptModel:
             bat_c[:, t] = x[self.n_tot * t + self.n_bus + self.n_gen: self.n_tot * t + self.n_pds - self.n_bat]
             bat_d[:, t] = x[self.n_tot * t + self.n_bus + self.n_gen + self.n_bat: self.n_tot * t + self.n_pds]
             pumps[:, t] = x[self.n_tot * t + self.n_pds: self.n_tot * t + self.n_pds + self.n_combs]
-            desal[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs: self.n_tot * t + self.n_pds + self.n_wds]
+            desal[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs: self.n_tot * t + self.n_pds + self.n_combs + self.n_desal]
+            tanks[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs + self.n_desal: self.n_tot * t + self.n_pds + self.n_wds]
             w[:, t] = x[self.n_tot * self.t + self.n_gen * t]
 
-        return {'theta': theta, 'gen_p': gen, 'bat_c': bat_c, 'bat_d': bat_d, 'w': w, 'pumps': pumps, 'desal': desal}
+        return {'theta': theta, 'gen_p': gen, 'bat_c': bat_c, 'bat_d': bat_d, 'w': w,
+                'pumps': pumps, 'desal': desal, 'tanks': tanks}
 
 
 class StandardDCPF(BaseOptModel):
