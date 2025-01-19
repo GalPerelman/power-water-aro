@@ -66,7 +66,7 @@ class BaseOptModel:
         # preparing pds-wds links columns
         pumps_power, desal_power = self.construct_wds_pds_links()
 
-        mat = np.zeros((self.n_bus * self.t + self.t + self.n_tanks * self.t, self.n_tot * self.t + self.n_pw_vars))
+        mat = np.zeros((self.n_bus * self.t + self.n_tanks * self.t, self.n_tot * self.t + self.n_pw_vars))
         for t in range(self.t):
             mat[self.n_bus * t: self.n_bus * (t + 1), self.n_tot * t: self.n_tot * t + self.n_bus] = self.pds.y
 
@@ -93,11 +93,9 @@ class BaseOptModel:
                 self.n_tot * t + (self.n_pds + self.n_combs):
                 self.n_tot * t + (self.n_pds + self.n_combs) + self.n_desal] = -1 * desal_power
 
-            # bus 0 angle == 0 for every time step
-            mat[self.pds.n_bus * self.t + t, self.n_tot * t] = 1
 
         # water balance
-        start_row = self.n_bus * self.t + self.t
+        start_row = self.n_bus * self.t
         for tank_idx, (tank_name, tank_data) in enumerate(self.wds.tanks.iterrows()):
             for t in range(self.t):
                 r = start_row + tank_idx + self.n_tanks * t
@@ -139,8 +137,13 @@ class BaseOptModel:
         return pumps_power, desal_power
 
     def get_x_bounds(self):
+        bus_angles_lb = np.tile(np.pi, self.n_bus)
+        bus_angles_ub = np.tile(np.pi, self.n_bus)
+        bus_angles_lb[0] = -0.000001
+        bus_angles_ub[0] = 0.000001
+
         ub = np.tile(
-            np.hstack([np.tile(np.pi, self.n_bus),  # upper bound for bus angles
+            np.hstack([bus_angles_ub,  # upper bound for bus angles
                        self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'max_gen_p_pu'],  # generators ub
                        self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],  # batteries charge ub
                        self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],  # batteries discharge lb
@@ -149,10 +152,10 @@ class BaseOptModel:
                        np.tile(np.inf, self.n_tanks)  # tank inflows
                        ]), self.t)
         lb = np.tile(
-            np.hstack([np.tile(-np.pi, self.n_bus),  # lower bound for bus angles
-                       self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
-                       np.tile(0, self.n_bat),  # lower bound for batteries charge
-                       np.tile(0, self.n_bat),  # lower bound for batteries discharge
+            np.hstack([bus_angles_lb,  # lower bound for bus angles
+                       -1 * self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
+                       np.tile(0.0, self.n_bat),  # lower bound for batteries charge
+                       np.tile(0.0, self.n_bat),  # lower bound for batteries discharge
                        np.tile(0, self.n_combs),  # lower bound for combs duration
                        self.wds.desal['min_flow'].values,  # desalination lower bound
                        np.tile(-np.inf, self.n_tanks)  # tank inflows
