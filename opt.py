@@ -46,10 +46,13 @@ class BaseOptModel:
     def build_equality_constraints(self):
         """
         Construct the bus power balance matrix for the case of equality constraints
-        variables order (matrix columns):
+        variables order (matrix columns), for t in range(self.t):
+
         [θ0, θ1, ... θN | Xg0, Xg1, ... XgN | bat0C, Xbat1C, ... batNC | bat0D, Xbat1D, ... batND |
-        comb0, comb1 ... combN | desal0, desal1 ... deslaN
-        ]
+        comb0, comb1 ... combN | desal0, desal1 ... deslaN | tank0, tank1 ... tankN]
+
+        In the end are the piecewise linear variables:
+        [pw_g0_t0, pw_g1_t0 ... pw_G_t0, ... pw_g0_T, pw_g1_T ... pw_G_T]
         """
         # preparing batteries columns
         bat_cols = utils.get_mat_for_type(self.pds.bus, self.pds.batteries)
@@ -73,7 +76,7 @@ class BaseOptModel:
             gen_columns = utils.get_mat_for_type(self.pds.bus, self.pds.generators)
             gen_columns = gen_columns[:, np.any(gen_columns, axis=0)]
             mat[self.n_bus * t: self.n_bus * (t + 1),
-            self.n_tot * t + self.n_bus: self.n_tot * t + (self.n_bus + self.n_gen)] = gen_columns
+                self.n_tot * t + self.n_bus: self.n_tot * t + (self.n_bus + self.n_gen)] = gen_columns
 
             # batteries variables explicitly represent the net in/out from the battery
             # first block of columns for charging, second block for discharging
@@ -146,10 +149,10 @@ class BaseOptModel:
             np.hstack([bus_angles_ub,  # upper bound for bus angles
                        self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'max_gen_p_pu'],  # generators ub
                        self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],  # batteries charge ub
-                       self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],  # batteries discharge lb
+                       self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],  # batteries discharge ub
                        np.tile(1, self.n_combs),  # upper bound for combs duration
                        self.wds.desal['max_flow'].values,  # desalination upper bound
-                       np.tile(np.inf, self.n_tanks)  # tank inflows
+                       np.tile(10 ** 6, self.n_tanks)  # tank inflows
                        ]), self.t)
         lb = np.tile(
             np.hstack([bus_angles_lb,  # lower bound for bus angles
@@ -162,7 +165,7 @@ class BaseOptModel:
                        ]), self.t)
 
         if self.pw_segments is not None:
-            pw_ub = 10 ** 10  # inf
+            pw_ub = 10 ** 8  # inf
             ub = np.hstack([ub, np.tile(pw_ub, self.n_pw_vars)])
             lb = np.hstack([lb, np.tile(0, self.n_pw_vars)])
         return lb, ub
