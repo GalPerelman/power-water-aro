@@ -270,49 +270,31 @@ class BaseOptModel:
                 mat[i * self.t + t, self.n_tot * t + self.n_pds + counter: self.n_tot * t + self.n_pds + counter + k] = 1
             counter += k
 
-        self.ineq_mat["one_comb"] = mat
-        self.ineq_rhs["one_comb"] = rhs
+        if counter > 0:
+            self.ineq_mat["one_comb"] = mat
+            self.ineq_rhs["one_comb"] = rhs
 
     def water_mass_balance(self):
         mat = np.zeros((2 * self.n_tanks * self.t, self.n_tot * self.t + self.n_pw_vars))
         rhs = np.zeros(2 * self.n_tanks * self.t)
         for tank_idx, (tank_name, tank_data) in enumerate(self.wds.tanks.iterrows()):
-            for comb_idx, comb_data in self.wds.combs.iterrows():
-                for t in range(self.t):
-                    col = self.n_tot * t + self.n_pds + comb_idx
-                    start_row_lb = tank_idx * self.t + t
-                    end_row_lb = (tank_idx + 1) * self.t
-                    start_row_ub = self.n_tanks * self.t + tank_idx * self.t + t
-                    end_row_ub = self.n_tanks * self.t + (tank_idx + 1) * self.t
+            for t in range(self.t):
+                col = self.n_tot * t + self.n_pds + self.n_combs + self.n_desal + tank_idx
+                start_row_lb = tank_idx * self.t + t
+                end_row_lb = (tank_idx + 1) * self.t
+                start_row_ub = self.n_tanks * self.t + tank_idx * self.t + t
+                end_row_ub = self.n_tanks * self.t + (tank_idx + 1) * self.t
 
-                    if comb_data['to'] == tank_name:
-                        mat[start_row_lb: end_row_lb, col] = - (comb_data['flow'])  # lb: -Qin <= RHS
-                        mat[start_row_ub: end_row_ub, col] = comb_data['flow']  # ub: Qin <= RHS
+                mat[start_row_lb: end_row_lb, col] = -1  # lb: -Qin <= RHS
+                mat[start_row_ub: end_row_ub, col] = 1  # ub: Qin <= RHS
 
-                    if comb_data['from'] == tank_name:
-                        mat[start_row_lb: end_row_lb, col] = comb_data['flow']
-                        mat[start_row_ub: end_row_ub, col] = - comb_data['flow']
-
-            for desal_idx, desal_data in self.wds.desal.iterrows():
-                for t in range(self.t):
-                    if desal_data['to'] == tank_name:
-                        col = self.n_tot * t + self.n_pds + self.n_combs + desal_idx
-                        start_row_lb = tank_idx * self.t + t
-                        end_row_lb = (tank_idx + 1) * self.t
-                        start_row_ub = self.n_tanks * self.t + tank_idx * self.t + t
-                        end_row_ub = self.n_tanks * self.t + (tank_idx + 1) * self.t
-
-                        mat[start_row_lb: end_row_lb, col] = -1
-                        mat[start_row_ub: end_row_ub, col] = 1
-
-            dem = self.wds.demands.loc[:, tank_name].iloc[:self.t].cumsum()
             tank_start_row, tank_end_row = tank_idx * self.t, (tank_idx + 1) * self.t
-            rhs[tank_start_row: tank_end_row] = tank_data['init_vol'] - tank_data['min_vol'] - dem  # lb
-            rhs[tank_end_row - 1] = -self.wds.demands.loc[:, tank_name].iloc[:self.t].sum()  # final tank vol
+            rhs[tank_start_row: tank_end_row] = tank_data['init_vol'] - tank_data['min_vol']  # lb
+            rhs[tank_end_row - 1] = 0  # final tank vol
 
             tank_start_row = self.n_tanks * self.t + tank_idx * self.t  # for ub
             tank_end_row = self.n_tanks * self.t + (tank_idx + 1) * self.t  # for ub
-            rhs[tank_start_row: tank_end_row] = - tank_data['init_vol'] + tank_data['max_vol'] + dem  # ub
+            rhs[tank_start_row: tank_end_row] = - tank_data['init_vol'] + tank_data['max_vol']  # ub
 
         self.ineq_mat["mass_balance"] = mat
         self.ineq_rhs["mass_balance"] = rhs
