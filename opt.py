@@ -117,11 +117,8 @@ class BaseOptModel:
                 mat[r, self.n_tot * t + self.n_pds + self.n_combs + self.n_desal + tank_idx] = -1
 
         # constructing corresponding RHS
-        loads = self.pds.dem_active.values[:, :self.t].flatten('F')
-        injections = np.multiply(self.pds.bus['max_pv_pu'].values,
-                                 self.pds.max_gen_profile.values[:, :self.t].T).T.flatten('F')
-        demands = self.wds.demands.values[:self.t, :].flatten()
-        rhs = np.hstack([loads - injections, np.zeros(self.t), demands])  # add zeros for ref bust angles
+        loads, injections, demands = self.get_nominal_rhs()
+        rhs = np.hstack([loads - injections, demands])  # add zeros for ref bust angles
         return mat, rhs
 
     def construct_wds_pds_links(self):
@@ -138,6 +135,14 @@ class BaseOptModel:
             desal_power = (self.pds.desal_bus.values * self.wds.desal_power * self.wds_power_units_factor)
 
         return pumps_power, desal_power
+
+    def get_nominal_rhs(self):
+        loads = self.pds.dem_active.values[:, :self.t].flatten('F')
+        injections = np.multiply(self.pds.bus['max_pv_pu'].values,
+                                 self.pds.max_gen_profile.values[:, :self.t].T).T.flatten('F')
+
+        demands = self.wds.demands.values[:self.t, :].flatten()
+        return loads, injections, demands
 
     def get_x_bounds(self):
         bus_angles_lb = np.tile(np.pi, self.n_bus)
