@@ -1,10 +1,28 @@
+import os
+import pickle
+import time
+import datetime
+import matplotlib.pyplot as plt
 import numpy as np
 import cvxpy as cp
-import simpy as sp
+import pandas as pd
+import sympy as sp
 import scipy
+import copy
+import seaborn as sns
 
+import gurobipy as gp
+from gurobipy import GRB
+
+import graphs
 import utils
 import uncertainty
+from pds import PDS
+from wds import WDS
+
+np.set_printoptions(linewidth=10 ** 5)
+np.set_printoptions(suppress=True)
+np.set_printoptions(precision=6)
 
 class BaseOptModel:
     def __init__(self, pds, wds, t, omega=None, pw_segments=None, solver_params=None, solver_display=False):
@@ -336,9 +354,11 @@ class BaseOptModel:
             bat_c[:, t] = x[self.n_tot * t + self.n_bus + self.n_gen: self.n_tot * t + self.n_pds - self.n_bat]
             bat_d[:, t] = x[self.n_tot * t + self.n_bus + self.n_gen + self.n_bat: self.n_tot * t + self.n_pds]
             pumps[:, t] = x[self.n_tot * t + self.n_pds: self.n_tot * t + self.n_pds + self.n_combs]
-            desal[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs: self.n_tot * t + self.n_pds + self.n_combs + self.n_desal]
-            tanks[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs + self.n_desal: self.n_tot * t + self.n_pds + self.n_wds]
-            w[:, t] = x[self.n_tot * self.t + self.n_gen * t]
+            desal[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs:
+                            self.n_tot * t + self.n_pds + self.n_combs + self.n_desal]
+            tanks[:, t] = x[self.n_tot * t + self.n_pds + self.n_combs + self.n_desal:
+                            self.n_tot * t + self.n_pds + self.n_wds]
+            # w[:, t] = x[self.n_tot * self.t + self.n_gen * t]
 
         return {'theta': theta, 'gen_p': gen, 'bat_c': bat_c, 'bat_d': bat_d, 'w': w,
                 'pumps': pumps, 'desal': desal, 'tanks': tanks}
