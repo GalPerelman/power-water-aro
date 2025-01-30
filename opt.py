@@ -145,7 +145,7 @@ class BaseOptModel:
         return loads, injections, demands
 
     def get_x_bounds(self):
-        bus_angles_lb = np.tile(np.pi, self.n_bus)
+        bus_angles_lb = -np.tile(np.pi, self.n_bus)
         bus_angles_ub = np.tile(np.pi, self.n_bus)
         bus_angles_lb[0] = -0.000001
         bus_angles_ub[0] = 0.000001
@@ -161,12 +161,12 @@ class BaseOptModel:
                        ]), self.t)
         lb = np.tile(
             np.hstack([bus_angles_lb,  # lower bound for bus angles
-                       -1 * self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
-                       np.tile(0.0, self.n_bat),  # lower bound for batteries charge
-                       np.tile(0.0, self.n_bat),  # lower bound for batteries discharge
+                       self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
+                       np.tile(0, self.n_bat),  # lower bound for batteries charge
+                       np.tile(0, self.n_bat),  # lower bound for batteries discharge
                        np.tile(0, self.n_combs),  # lower bound for combs duration
                        self.wds.desal['min_flow'].values,  # desalination lower bound
-                       np.tile(-np.inf, self.n_tanks)  # tank inflows
+                       - np.tile(10 ** 6, self.n_tanks)  # tank inflows
                        ]), self.t)
 
         if self.pw_segments is not None:
