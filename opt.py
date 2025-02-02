@@ -43,8 +43,9 @@ class BaseOptModel:
 
         # total number of variables per time step (not including piecewise linear)
         # batteries have 2 variables (charging and discharging)
-        self.n_pds, self.n_wds = self.n_bus + self.n_gen + 2 * self.n_bat, self.n_combs + self.n_desal + self.n_tanks
-        self.n_tot = self.n_bus + self.n_gen + 2 * self.n_bat + self.n_combs + self.n_desal + self.n_tanks
+        self.n_pds = self.n_bus + self.n_gen + self.n_bat_vars * self.n_bat
+        self.n_wds = self.n_combs + self.n_desal + self.n_tanks
+        self.n_tot = self.n_bus + self.n_gen + self.n_bat_vars * self.n_bat + self.n_combs + self.n_desal + self.n_tanks
         self.w = 0 if self.pw_segments is None else self.pw_segments + 1  # number of segments edges
 
         # piecewise variables
@@ -73,16 +74,19 @@ class BaseOptModel:
         [pw_g0_t0, pw_g1_t0 ... pw_G_t0, ... pw_g0_T, pw_g1_T ... pw_G_T]
         """
         # preparing batteries columns
-        bat_cols = utils.get_mat_for_type(self.pds.bus, self.pds.batteries)
-        bat_cols = bat_cols[:, np.any(bat_cols, axis=0)]
-        charge_eff = self.pds.bus["charge_eff"].values.reshape(-1, 1)
-        bat_charge_cols = np.divide(bat_cols, charge_eff, out=np.full_like(bat_cols, 0, dtype=float),
-                                    where=charge_eff != 0)
-        bat_charge_cols[np.abs(bat_charge_cols) < 10 ** -6] = 0
-
-        discharge_eff = self.pds.bus["discharge_eff"].values.reshape(-1, 1)
-        bat_discharge_cols = np.multiply(bat_cols, discharge_eff)
-        bat_discharge_cols[np.abs(bat_discharge_cols) < 10 ** -6] = 0
+        if self.n_bat_vars == 2:
+            bat_cols = utils.get_mat_for_type(self.pds.bus, self.pds.batteries)
+            bat_cols = bat_cols[:, np.any(bat_cols, axis=0)]
+            charge_eff = self.pds.bus["charge_eff"].values.reshape(-1, 1)
+            bat_c_cols = np.divide(bat_cols, charge_eff, out=np.full_like(bat_cols, 0, dtype=float),
+                                   where=charge_eff != 0)
+            bat_c_cols[np.abs(bat_c_cols) < 10 ** -6] = 0
+            discharge_eff = self.pds.bus["discharge_eff"].values.reshape(-1, 1)
+            bat_d_cols = np.multiply(bat_cols, discharge_eff)
+            bat_d_cols[np.abs(bat_d_cols) < 10 ** -6] = 0
+        else:
+            bat_cols = utils.get_mat_for_type(self.pds.bus, self.pds.batteries)
+            bat_c_cols = bat_cols[:, np.any(bat_cols, axis=0)]
 
         # preparing pds-wds links columns
         pumps_power, desal_power = self.construct_wds_pds_links()
@@ -98,12 +102,16 @@ class BaseOptModel:
 
             # batteries variables explicitly represent the net in/out from the battery
             # first block of columns for charging, second block for discharging
-            mat[self.n_bus * t: self.n_bus * (t + 1),
+            if self.n_bat_vars == 2:
+                mat[self.n_bus * t: self.n_bus * (t + 1),
+                    self.n_tot * t + (self.n_bus + self.n_gen):
+                    self.n_tot * t + (self.n_bus + self.n_gen) + self.n_bat] = -1 * bat_c_cols
+                mat[self.n_bus * t: self.n_bus * (t + 1),
+                    self.n_tot * t + (self.n_bus + self.n_gen + self.n_bat): self.n_tot * t + self.n_pds] = bat_d_cols
+            else:
+                mat[self.n_bus * t: self.n_bus * (t + 1),
                 self.n_tot * t + (self.n_bus + self.n_gen):
-                self.n_tot * t + (self.n_bus + self.n_gen) + self.n_bat] = -1 * bat_charge_cols
-            mat[self.n_bus * t: self.n_bus * (t + 1),
-                self.n_tot * t + (self.n_bus + self.n_gen + self.n_bat): self.n_tot * t + self.n_pds] \
-                = bat_discharge_cols
+                self.n_tot * t + (self.n_bus + self.n_gen) + self.n_bat] = -1 * bat_c_cols
 
             # pumps combs variables inside power balance (multiplied by the combination nominal power)
             mat[self.n_bus * t: self.n_bus * (t + 1),
@@ -168,24 +176,36 @@ class BaseOptModel:
         bus_angles_lb[0] = -0.000001
         bus_angles_ub[0] = 0.000001
 
-        ub = np.tile(
-            np.hstack([bus_angles_ub,  # upper bound for bus angles
-                       self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'max_gen_p_pu'],  # generators ub
-                       self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],  # batteries charge ub
-                       self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],  # batteries discharge ub
-                       np.tile(1, self.n_combs),  # upper bound for combs duration
-                       self.wds.desal['max_flow'].values,  # desalination upper bound
-                       np.tile(10 ** 6, self.n_tanks)  # tank inflows
-                       ]), self.t)
-        lb = np.tile(
-            np.hstack([bus_angles_lb,  # lower bound for bus angles
-                       self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
-                       np.tile(0, self.n_bat),  # lower bound for batteries charge
-                       np.tile(0, self.n_bat),  # lower bound for batteries discharge
-                       np.tile(0, self.n_combs),  # lower bound for combs duration
-                       self.wds.desal['min_flow'].values,  # desalination lower bound
-                       - np.tile(10 ** 6, self.n_tanks)  # tank inflows
-                       ]), self.t)
+        single_t_lb = np.hstack([bus_angles_lb,  # lower bound for bus angles
+                                 self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
+                                 np.tile(0, self.n_bat),  # lower bound for batteries charge
+                                 np.tile(0, self.n_bat),  # lower bound for batteries discharge
+                                 np.tile(0, self.n_combs),  # lower bound for combs duration
+                                 self.wds.desal['min_flow'].values,  # desalination lower bound
+                                 - np.tile(10 ** 6, self.n_tanks)  # tank inflows
+                                 ])
+
+        single_t_ub = np.hstack([bus_angles_ub,  # upper bound for bus angles
+                                 self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'max_gen_p_pu'],
+                                 self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],
+                                 self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],
+                                 np.tile(1, self.n_combs),  # upper bound for combs duration
+                                 self.wds.desal['max_flow'].values,  # desalination upper bound
+                                 np.tile(10 ** 6, self.n_tanks)  # tank inflows
+                                 ])
+
+        if self.n_bat_vars == 1:
+            mask = np.ones(len(single_t_lb), dtype=bool)
+            idx_to_drop = [self.n_bus + self.n_gen + _ + 1 for _ in range(self.n_bat)]
+            mask[idx_to_drop] = False
+            single_t_lb = single_t_lb[mask]
+            single_t_ub = single_t_ub[mask]
+
+            bat_discharge = -self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge']
+            single_t_lb[self.n_bus + self.n_gen: self.n_pds] = bat_discharge
+
+        lb = np.tile(single_t_lb, self.t)
+        ub = np.tile(single_t_ub, self.t)
 
         if self.pw_segments is not None:
             pw_ub = 10 ** 8  # inf
@@ -239,16 +259,24 @@ class BaseOptModel:
         rhs = np.zeros((self.n_bat * 2 * self.t))
         for b in range(self.n_bat):
             for t in range(self.t):
-                charge_col = self.n_tot * t + (self.n_bus + self.n_gen) + b
-                discharge_col = self.n_tot * t + (self.n_bus + self.n_gen + self.n_bat) + b
-                start_row, end_row = 2 * b * self.t + t, (2 * b + 1) * self.t
+                if self.n_bat_vars == 2:
+                    charge_col = self.n_tot * t + (self.n_bus + self.n_gen) + b
+                    discharge_col = self.n_tot * t + (self.n_bus + self.n_gen + self.n_bat) + b
+                    start_row, end_row = 2 * b * self.t + t, (2 * b + 1) * self.t
+                    # first t rows are used for lb for the 'b' battery
+                    mat[start_row: end_row, charge_col] = -1
+                    mat[start_row: end_row, discharge_col] = 1
+                    # next block of t rows are used for ub for the 'b' battery
+                    mat[start_row + self.t: end_row + self.t, charge_col] = 1
+                    mat[start_row + self.t: end_row + self.t, discharge_col] = -1
 
-                # first t rows are used for lb for the 'b' battery
-                mat[start_row: end_row, charge_col] = -1
-                mat[start_row: end_row, discharge_col] = 1
-                # next block of t rows are used for ub for the 'b' battery
-                mat[start_row + self.t: end_row + self.t, charge_col] = 1
-                mat[start_row + self.t: end_row + self.t, discharge_col] = -1
+                else:
+                    charge_col = self.n_tot * t + (self.n_bus + self.n_gen) + b
+                    start_row, end_row = 2 * b * self.t + t, (2 * b + 1) * self.t
+                    # first t rows are used for lb for the 'b' battery
+                    mat[start_row: end_row, charge_col] = -1
+                    # next block of t rows are used for ub for the 'b' battery
+                    mat[start_row + self.t: end_row + self.t, charge_col] = 1
 
             rhs[2 * b * self.t: (2 * b + 1) * self.t] = - bat_min[b] + bat_init[b]  # lb
             rhs[(2 * b + 1) * self.t - 1] = bat_init[b] - bat_final[b]  # final battery state of charge
