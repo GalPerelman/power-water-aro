@@ -345,27 +345,67 @@ class BaseOptModel:
         self.ineq_mat["mass_balance"] = mat
         self.ineq_rhs["mass_balance"] = rhs
 
-    def get_variables_to_eliminate(self, method='qr'):
+    def get_variables_to_eliminate(self, mat, method='qr'):
         if method == 'rref':
-            echelon, indep_idx = sp.Matrix(self.eq_mat).rref()
-            dep_idx = np.setxor1d(np.arange(self.eq_mat.shape[1]), indep_idx)
+            echelon, dep_idx = sp.Matrix(mat).rref()
+            indep_idx = np.setxor1d(np.arange(mat.shape[1]), dep_idx)
+            indep_idx = list(indep_idx)
 
-        else:
-            q, r, p = scipy.linalg.qr(self.eq_mat, pivoting=True)
+        elif method == 'qr':
+            q, r, p = scipy.linalg.qr(mat, pivoting=True)
             tol = 1e-10  # tolerance for detecting non-zero entries
             rank = np.sum(np.abs(np.diag(r)) > tol)
             independent_columns_indices = p[:rank]
-            indep_idx = independent_columns_indices
-            dep_idx = np.setxor1d(np.arange(self.eq_mat.shape[1]), indep_idx)
+            dep_idx = independent_columns_indices
+            indep_idx = np.setxor1d(np.arange(mat.shape[1]), dep_idx)
 
-        indep_idx, dep_idx = sorted(list(indep_idx)), sorted(list(dep_idx))
-        return indep_idx, dep_idx
+            Q, R, P = scipy.linalg.qr(mat, pivoting=True)
+            diag = np.abs(np.diag(R))
+            rank = np.sum(diag > tol)
+            dep_idx = sorted(P[:rank].tolist())
+            indep_idx = sorted(P[rank:].tolist())
 
-    def solve(self):
-        self.model = cp.Problem(cp.Minimize(self.piecewise_costs @ self.x), self.constraints)
-        self.model.solve(solver=cp.GUROBI, reoptimize=True)
-        obj, status, solver_time = self.model.value, self.model.status, self.model.solver_stats.solve_time
-        return obj, status, solver_time
+        elif method == 'svd':
+            u, sigma, vt = np.linalg.svd(mat, full_matrices=False)
+            tol = max(mat.shape) * np.max(sigma) * np.finfo(float).eps
+            rank = np.sum(sigma > tol)
+            dep_idx = np.arange(mat.shape[1])[:rank]
+            indep_idx = np.arange(mat.shape[1])[rank:]
+
+        elif method == 'manual':
+            indep_idx, dep_idx = self.manually_decompose_variables()
+
+        dep_idx, indep_idx = sorted(list(dep_idx)), sorted(list(indep_idx))
+        return dep_idx, indep_idx
+
+    def manually_decompose_variables(self):
+        """
+        Build the independent and dependent variables from an input list by the user
+        The list contain the independent variables of the first time step (not including piecewise linear)
+        Based on this list the independent variables are duplicated to include all time steps
+        and the piecewise linear variables which are always independent are added
+        :return:
+        """
+        piecewise_linear_vars = [self.n_tot * self.t + _ for _ in range(self.n_gen)]  # always indep
+        indep_0 = self.manual_indep_variables + piecewise_linear_vars
+        dep_0 = [_ for _ in range(self.n_tot) if _ not in indep_0]
+        indep_all, dep_all = [], []
+
+        for i in indep_0:
+            if i <= self.n_tot:
+                indep_all += [i + self.n_tot * _ for _ in range(self.t)]
+            else:
+                indep_all += [i + self.n_gen * _ for _ in range(self.t)]  # pw variables
+
+        for i in dep_0:
+            if i <= self.n_tot:
+                dep_all += [i + self.n_tot * _ for _ in range(self.t)]
+            else:
+                dep_all += [i + self.n_gen * _ for _ in range(self.t)]  # pw variables
+
+        indep_all = sorted(indep_all)
+        dep_all = sorted(dep_all)
+        return indep_all, dep_all
 
     def decompose_x(self, x):
         theta = np.zeros((self.n_bus, self.t))
