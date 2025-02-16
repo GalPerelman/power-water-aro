@@ -357,14 +357,14 @@ class BaseOptModel:
     def one_comb_only(self):
         mat = np.zeros((self.wds.n_stations * self.t, self.n_tot * self.t + self.n_pw_vars))
         rhs = np.ones(self.wds.n_stations * self.t)
-        counter = 0
+        c = 0
         for i, station in enumerate(self.wds.combs["station"].unique()):
             k = len(self.wds.combs.loc[self.wds.combs["station"] == station])  # num combs for station
             for t in range(self.t):
-                mat[i * self.t + t, self.n_tot * t + self.n_pds + counter: self.n_tot * t + self.n_pds + counter + k] = 1
-            counter += k
+                mat[i * self.t + t, self.n_tot * t + self.n_pds + c: self.n_tot * t + self.n_pds + c + k] = 1
+            c += k
 
-        if counter > 0:
+        if c > 0:
             self.ineq_mat["one_comb"] = mat
             self.ineq_rhs["one_comb"] = rhs
 
@@ -484,8 +484,11 @@ class StandardDCPF(BaseOptModel):
     """
     Based on standard equality constraints
     """
-    def __init__(self, pds, wds, t, omega, pw_segments=None, solver_params=None, solver_display=False):
-        super().__init__(pds, wds, t, omega, pw_segments, solver_params, solver_display)
+
+    def __init__(self, pds_path, wds_path, t, omega=None, opt_method=None, elimination_method=None, pw_segments=None,
+                 n_bat_vars=2, solver_params=None, solver_display=False):
+        super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, pw_segments, n_bat_vars,
+                         solver_params, solver_display)
 
         self.lb, self.ub = self.get_x_bounds()
         self.x = self.declare_variables()
@@ -501,19 +504,24 @@ class StandardDCPF(BaseOptModel):
         for (name_mat, mat), (name_rhs, rhs) in zip(self.ineq_mat.items(), self.ineq_rhs.items()):
             self.constraints.append(mat @ self.x <= rhs)
 
+    def solve(self):
+        self.problem = cp.Problem(cp.Minimize(self.piecewise_costs @ self.x), self.constraints)
+        self.problem.solve(solver=cp.GUROBI, reoptimize=True)
+        obj, status, solver_time = self.problem.value, self.problem.status, self.problem.solver_stats.solve_time
+        return obj, status, solver_time
+
 
 class RODCPF(BaseOptModel):
     """
     variables are dependent on the equality constraints RHS
-    x_indep = (A_indep)^-1 * (b - A_dep) * x_dep
-
+    x_dep = (A_dep)^-1 * (b - A_indep) * x_indep
     Therefore, before decalring x, the RHS is updated to include uncertainty
     """
     def __init__(self, pds, wds, t, omega, pw_segments=None, solver_params=None, solver_display=False):
         super().__init__(pds, wds, t, omega, pw_segments, solver_params, solver_display)
 
-        self.indep_idx, self.dep_idx = self.get_variables_to_eliminate(method='qr')
-        self.delta = uncertainty.affine_mat(self.pds, self.wds, self.t)
+        self.dep_idx, self.indep_idx = self.get_variables_to_eliminate(method='qr')
+        self.cov, self.delta = uncertainty.affine_mat(self.pds, self.wds, self.t)
         self.uncertain_rhs = self.add_rhs_uncertainty()
 
         self.lb, self.ub = self.get_x_bounds()
@@ -531,14 +539,14 @@ class RODCPF(BaseOptModel):
         return uncertain_rhs
 
     def declare_variables(self):
-        _x = cp.Variable(len(self.dep_idx))
+        y = cp.Variable(len(self.indep_idx))
         # extend _x to an expression includes all the decision variables (dependent and independent)
-        p1 = np.zeros((self.eq_mat.shape[1], len(self.indep_idx)))
-        p1[self.indep_idx, :] = np.eye(len(self.indep_idx))
-        p2 = np.zeros((self.eq_mat.shape[1], len(self.dep_idx)))
-        p2[self.dep_idx, :] = np.eye(len(self.dep_idx))
-        x = (p1 @ np.linalg.pinv(self.eq_mat[:, self.indep_idx])
-                  @ (self.uncertain_rhs - self.eq_mat[:, self.dep_idx] @ _x) + p2 @ _x)
+        p1 = np.zeros((self.eq_mat.shape[1], len(self.dep_idx)))
+        p1[self.dep_idx, :] = np.eye(len(self.dep_idx))
+        p2 = np.zeros((self.eq_mat.shape[1], len(self.indep_idx)))
+        p2[self.indep_idx, :] = np.eye(len(self.indep_idx))
+        x = (p1 @ np.linalg.pinv(self.eq_mat[:, self.dep_idx])
+             @ (self.uncertain_rhs - self.eq_mat[:, self.indep_idx] @ y) + p2 @ y)
 
         self.constraints += [x <= self.ub, x >= self.lb]
         return x
