@@ -67,6 +67,11 @@ class PDS:
         self.max_gen_profile = pd.read_csv(os.path.join(self.data_folder, 'max_gen_profile.csv'), index_col=0)
         self.pumps_bus = pd.read_csv(os.path.join(self.data_folder, 'pumps_bus.csv'), index_col=0).fillna(0)
         self.desal_bus = pd.read_csv(os.path.join(self.data_folder, 'desal_bus.csv'), index_col=0).fillna(0)
+
+        self.dem_active_std = pd.read_csv(os.path.join(self.data_folder, 'dem_active_power_std.csv'), index_col=0)
+        self.pv_std = pd.read_csv(os.path.join(self.data_folder, 'pv_std.csv'), index_col=0)
+
+
         try:
             # optional input
             self.bus_criticality = pd.read_csv(os.path.join(self.data_folder, 'criticality.csv'), index_col=0)
@@ -123,6 +128,7 @@ class PDS:
 
         self.dem_active = (self.dem_active * c) / (self.power_base_mva * 10 ** 6)
         self.dem_reactive = (self.dem_reactive * c) / (self.power_base_mva * 10 ** 6)
+        self.dem_active_std = (self.dem_active_std * c) / (self.power_base_mva * 10 ** 6)
 
         self.bus['max_gen_p_pu'] = (self.bus['max_gen_p'] * c) / (self.power_base_mva * 10 ** 6)
         self.bus['min_gen_p_pu'] = (self.bus['min_gen_p'] * c) / (self.power_base_mva * 10 ** 6)
@@ -130,6 +136,8 @@ class PDS:
         self.bus['min_gen_q_pu'] = (self.bus['min_gen_q'] * c) / (self.power_base_mva * 10 ** 6)
         self.bus['max_pv_pu'] = (self.bus['max_pv'] * c) / (self.power_base_mva * 10 ** 6)
         self.bus['min_pv_pu'] = (self.bus['min_pv'] * c) / (self.power_base_mva * 10 ** 6)
+
+        self.pv_std = (self.pv_std.values.T * self.bus['max_pv_pu'].values).T
         self.bus['ramping'] = (self.bus['ramping'] * c) / (self.power_base_mva * 10 ** 6)
 
         self.bus['min_storage'] = (self.bus['min_storage'] * c) / (self.power_base_mva * 10 ** 6)
