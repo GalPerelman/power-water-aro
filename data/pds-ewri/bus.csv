@@ -1,0 +1,3 @@
+﻿bus_id,type,G,B,Vmax_pu,Vmin_pu
+0,gen,0,0,1.1,0.9
+1,PQ,0,0,1.1,0.9
