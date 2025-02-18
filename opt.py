@@ -573,6 +573,11 @@ class RobustModel(BaseOptModel):
         self.z0_val = None
         self.z1_val = None
 
+        self.n_uncertain_per_t = None
+        self.n_uncertain_bus_per_t = None
+        self.z_to_b_map = None
+        self.ldr_to_z_map = {}
+
         self.obj = None
         self.x = None
         self.x_by_sample = None
@@ -621,6 +626,18 @@ class RobustModel(BaseOptModel):
         self.p2[dep_relative_idx, :] = np.eye(len(self.dep_idx_t[0]))
         self.k1 = {t: self.p2 @ np.linalg.pinv(self.A1[t]) for t in range(self.t)}
         self.k2 = {t: self.p1 - (self.p2 @ np.linalg.pinv(self.A1[t])) @ self.A2[t] for t in range(self.t)}
+
+        certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
+        n_certain_bus_per_t = len(certain_bus_per_t)
+        self.n_uncertain_per_t = self.n_bus - n_certain_bus_per_t + self.n_tanks
+        self.n_uncertain_bus_per_t = self.n_bus - n_certain_bus_per_t
+        uncertain_bus = [_ for _ in range(self.n_bus * self.t) if _ not in self.get_certain_bus()]
+        if self.opt_method == "ro":
+            self.z_to_b_map = np.zeros((self.n_uncertain_per_t * self.t, self.b.shape[0]))
+        else:
+            self.z_to_b_map = np.zeros((self.n_uncertain_per_t * self.t, self.b.shape[0]))
+            self.z_to_b_map[:len(uncertain_bus), uncertain_bus] = np.eye(len(uncertain_bus))
+            self.z_to_b_map[-self.n_tanks * self.t:, -self.n_tanks * self.t:] = np.eye(self.n_tanks * self.t)
 
         # complete matrices
         self._A1 = self.A[:, self.dep_idx]
@@ -736,14 +753,13 @@ class RobustModel(BaseOptModel):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         self.t_fromulation_start = time.time()
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
-        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.b.shape[0]))
+        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
 
         nonanticipative_mat = self.build_nonanticipative_matrix()
         # flip nonanticipative mat - constraint is on the elements not included
         nonanticipative_mat = 1 - nonanticipative_mat
-        nonanticipative_mat[:, self.get_certain_bus()] = 1
         self.constraints += [cp.multiply(self.z1, nonanticipative_mat) == 0]
 
         w0 = sum(
@@ -751,7 +767,7 @@ class RobustModel(BaseOptModel):
             for t in range(self.t))
         w1 = sum((self.B[:, self.t_cols[t]] @ self.k1[t] @ np.eye(len(self.b))[self.t_eq_rows[t]])
                  + (self.B[:, self.t_cols[t]] @ self.k2[t])
-                 @ self.z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :]
+                 @ self.z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map
                  for t in range(self.t))
 
         for j in range(self.B.shape[0]):
@@ -765,7 +781,12 @@ class RobustModel(BaseOptModel):
                    for t in range(self.t))
         Obj1 = sum((f[:, self.t_cols[t]] @ self.k1[t] @ np.eye(len(self.b))[self.t_eq_rows[t]])
                    + (f[:, self.t_cols[t]] @ self.k2[t])
-                   @ self.z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :]
+                   @ self.z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map
+                   for t in range(self.t))
+        self.constraints.append(-self.obj + Obj0 + Obj1 @ self.b
+                                + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
+
+        self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
                    for t in range(self.t))
         self.constraints.append(-self.obj + Obj0 + Obj1 @ self.b
                                 + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
@@ -842,7 +863,7 @@ class RobustModel(BaseOptModel):
 
         # nominal solution
         yt = {t: self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].value
-                 + z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.b
+                 + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ self.b
               for t in range(self.t)}
 
         stacked_y = np.stack([_.T for _ in list(yt.values())])
@@ -919,7 +940,7 @@ class RobustModel(BaseOptModel):
         sample = np.vstack([sample_loads - sample_pv, sample_dem])
 
         yt = {t: self.z0_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].reshape(-1, 1)
-                 + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ sample
+                 + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ sample
               for t in range(self.t)}
 
         xt = {t: self.k1[t] @ sample[self.t_eq_rows[t]] + self.k2[t] @ yt[t] for t in range(self.t)}
