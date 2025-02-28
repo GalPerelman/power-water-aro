@@ -646,9 +646,6 @@ class RobustModel(BaseOptModel):
         # complete matrices
         self._A1 = self.A[:, self.dep_idx]
         self._A2 = self.A[:, self.indep_idx]
-        print(indep_relative_idx)
-
-
         self._p1 = np.zeros((self.A.shape[1], len(self.indep_idx)))
         self._p1[self.indep_idx, :] = np.eye(len(self.indep_idx))
         self._p2 = np.zeros((self.A.shape[1], len(self.dep_idx)))
@@ -696,8 +693,9 @@ class RobustModel(BaseOptModel):
         #            :self.t] * self.pds.to_pu
         # pv_std = (pd.read_csv(os.path.join(self.pds.data_folder, 'pv_std.csv'), index_col=0).iloc[:, :self.t].T
         #           * self.pds.bus['max_pv_pu'].values).T
-        certain_load_idx = np.where(self.pds.dem_active_std.values.flatten('F') == 0)[0]
-        certain_pv_idx = np.where(self.pds.pv_std.flatten('F') == 0)[0]
+
+        certain_load_idx = np.where(self.pds.dem_active_std.iloc[:, :self.t].values.flatten('F') == 0)[0]
+        certain_pv_idx = np.where(self.pds.pv_std[:, :self.t].flatten('F') == 0)[0]
         certain_idx = list(set(certain_load_idx) & set(certain_pv_idx))
         return certain_idx
 
@@ -731,11 +729,6 @@ class RobustModel(BaseOptModel):
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
-
-        nonanticipative_mat = self.build_nonanticipative_matrix()
-        # flip nonanticipative mat - constraint is on the elements not included
-        nonanticipative_mat = 1 - nonanticipative_mat
-        nonanticipative_mat[:, self.get_certain_bus()] = 1
 
         w0 = sum(
             (self.B[:, self.t_cols[t]] @ self.k2[t]) @ self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)]
