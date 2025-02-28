@@ -558,9 +558,13 @@ class RODCPF(BaseOptModel):
 
 class RobustModel(BaseOptModel):
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables=None,
-                 pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False, **kwargs):
+                 pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False, pds_lat=0, wds_lat=0,
+                 **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display, **kwargs)
+
+        self.pds_lat = pds_lat
+        self.wds_lat = wds_lat
 
         self.p1 = None
         self.p2 = None
@@ -672,8 +676,15 @@ class RobustModel(BaseOptModel):
                         mat[start_row:end_row, start_col:end_col] = 1
             return mat
 
-        loads_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_bus, T=self.t, lags=n_lags, lat=lat)
-        dem_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=lat)
+        # loads_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_bus, T=self.t, lags=n_lags, lat=lat)
+        # dem_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=lat)
+        # mat = np.block([loads_block, dem_block])
+
+        certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
+        n_certain_bus_per_t = len(certain_bus_per_t)
+        loads_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_bus - n_certain_bus_per_t, T=self.t, lags=n_lags,
+                                    lat=self.pds_lat)
+        dem_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.wds_lat)
         mat = np.block([loads_block, dem_block])
         return mat
 
