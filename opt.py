@@ -230,7 +230,7 @@ class BaseOptModel:
                                  np.tile(0, self.n_bat),  # lower bound for batteries discharge
                                  np.tile(0, self.n_combs),  # lower bound for combs duration
                                  self.wds.desal['min_flow'].values,  # desalination lower bound
-                                 - np.tile(10 ** 6, self.n_tanks)  # tank inflows
+                                 - np.tile(10 ** 4, self.n_tanks)  # tank inflows
                                  ])
 
         single_t_ub = np.hstack([bus_angles_ub,  # upper bound for bus angles
@@ -239,7 +239,7 @@ class BaseOptModel:
                                  self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],
                                  np.tile(1, self.n_combs),  # upper bound for combs duration
                                  self.wds.desal['max_flow'].values,  # desalination upper bound
-                                 np.tile(10 ** 6, self.n_tanks)  # tank inflows
+                                 np.tile(10 ** 4, self.n_tanks)  # tank inflows
                                  ])
 
         if self.n_bat_vars == 1:
@@ -256,7 +256,7 @@ class BaseOptModel:
         ub = np.tile(single_t_ub, self.t)
 
         if self.pw_segments is not None:
-            pw_ub = 10 ** 8  # inf
+            pw_ub = 10 ** 5  # inf
             ub = np.hstack([ub, np.tile(pw_ub, self.n_pw_vars)])
             lb = np.hstack([lb, np.tile(0, self.n_pw_vars)])
         return lb, ub
