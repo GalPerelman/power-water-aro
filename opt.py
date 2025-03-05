@@ -795,6 +795,72 @@ class RobustModel(BaseOptModel):
                                 + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
 
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
+
+    def formulate_reduced_opt_problem(self):
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        self.t_fromulation_start = time.time()
+        self.z0 = cp.Variable(self.n_indep_per_t * self.t)
+        self.obj = cp.Variable(1)
+        self.omega_param = cp.Parameter(nonneg=True)
+
+        self.z1 = {}
+        self.ldr_to_z_map = {}
+        for t in range(self.t):
+            if t > 0:
+                self.z1[t] = cp.Variable((self.n_indep_per_t, self.n_uncertain_per_t * t))
+                self.ldr_to_z_map[t] = np.zeros((self.n_uncertain_per_t * t, self.n_uncertain_per_t * self.t))
+                uncertain_bus = [_ for _ in range(self.n_bus * t) if _ not in self.get_certain_bus()]
+                # self._z1[t][:len(uncertain_bus), uncertain_bus] = np.eye(len(uncertain_bus))
+                # self._z1[t][-self.n_tanks * t:, -self.n_tanks * t:] = np.eye(self.n_tanks * t)
+                self.ldr_to_z_map[t][:len(uncertain_bus), :len(uncertain_bus)] = np.eye(len(uncertain_bus))
+                self.ldr_to_z_map[t][-self.n_tanks * t:,
+                                    self.n_uncertain_bus_per_t * self.t:
+                                    self.n_uncertain_bus_per_t * self.t + self.n_tanks * t] = np.eye(self.n_tanks * t)
+            else:
+                self.z1[t] = np.zeros((self.k2[t].shape[1], self.n_uncertain_per_t * self.t))
+                self.ldr_to_z_map[t] = np.zeros((self.n_uncertain_per_t * self.t, self.n_uncertain_per_t * self.t))
+
+        """
+        to do - update this function to allow use of pds_lat and wds_lat
+        the below code need to be tested before usage
+        """
+        # certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
+        # n_certain_bus_per_t = len(certain_bus_per_t)
+        # n_uncertain_bus_per_t = self.n_bus - n_certain_bus_per_t
+        # for t in range(self.t):
+        #     pds_ldr_dim = n_uncertain_bus_per_t * max(0, t - self.pds_lat)
+        #     wds_ldr_dim = self.n_tanks * max(0, t - self.wds_lat)
+        #     ldr_dim = pds_ldr_dim + wds_ldr_dim
+        #     if ldr_dim > 0:
+        #         self.z1[t] = cp.Variable((self.n_indep_per_t, ldr_dim))
+        #         self.ldr_to_z_map[t] = np.zeros((ldr_dim, self.n_uncertain_per_t * self.t))
+        #         uncertain_bus = [_ for _ in range(self.n_bus * (t - self.pds_lat)) if _ not in self.get_certain_bus()]
+        #         self.ldr_to_z_map[t][:len(uncertain_bus), :len(uncertain_bus)] = np.eye(len(uncertain_bus))
+        #         self.ldr_to_z_map[t][-self.n_tanks * (t - self.wds_lat):,
+        #                             self.n_uncertain_bus_per_t * self.t:
+        #                             self.n_uncertain_bus_per_t * self.t + self.n_tanks * (t - self.wds_lat)]\
+        #             = np.eye(self.n_tanks * (t - self.wds_lat))
+        #     else:
+        #         self.z1[t] = np.zeros((self.k2[t].shape[1], self.n_uncertain_per_t * self.t))
+        #         self.ldr_to_z_map[t] = np.zeros((self.n_uncertain_per_t * self.t, self.n_uncertain_per_t * self.t))
+
+        w0 = sum(
+            (self.B[:, self.t_cols[t]] @ self.k2[t]) @ self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)]
+            for t in range(self.t))
+        w1 = sum((self.B[:, self.t_cols[t]] @ self.k1[t] @ np.eye(len(self.b))[self.t_eq_rows[t]])
+                 + (self.B[:, self.t_cols[t]] @ self.k2[t]) @ self.z1[t] @ self.ldr_to_z_map[t] @ self.z_to_b_map
+                 for t in range(self.t))
+
+        for j in range(self.B.shape[0]):
+            self.constraints.append(-self.c[j] + w0[j] + (w1 @ self.b)[j]
+                                    + self.omega_param * cp.norm((w1 @ self.projected_delta)[j], 2) <= 0)
+
+        # formulate the objective function as constraint
+        f = self.piecewise_costs.reshape(1, -1)
+        Obj0 = sum((f[:, self.t_cols[t]] @ self.k2[t]) @ self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)]
+                   for t in range(self.t))
+        Obj1 = sum((f[:, self.t_cols[t]] @ self.k1[t] @ np.eye(len(self.b))[self.t_eq_rows[t]])
+                   + (f[:, self.t_cols[t]] @ self.k2[t]) @ self.z1[t] @ self.ldr_to_z_map[t] @ self.z_to_b_map
                    for t in range(self.t))
         self.constraints.append(-self.obj + Obj0 + Obj1 @ self.b
                                 + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
