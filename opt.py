@@ -887,7 +887,15 @@ class RobustModel(BaseOptModel):
 
         self.z0_val = self.z0.value
         if self.z1 is None:
-            self.z1_val = np.zeros((self.n_indep_per_t * self.t, self.b.shape[0]))
+            self.z1_val = np.zeros((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
+        elif isinstance(self.z1, cp.Variable):
+            self.z1_val = self.z1.value
+        elif isinstance(self.z1, dict):
+            # this is for the reduced problem formulation - z1 is a dict of cvxpy variables
+            self.z1_val = np.zeros((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
+            for t in range(self.t):
+                if t > 0:
+                    self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] = self.z1[t].value @ self.ldr_to_z_map[t]
         else:
             self.z1_val = self.z1.value
         self.extract_solution()
@@ -951,34 +959,33 @@ class RobustModel(BaseOptModel):
             self.z0 = solution['z0']
             self.z1 = solution['z1']
 
-    def expermiental_opt_formulation(self):
+    def experimental_opt_formulation(self):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         self.t_fromulation_start = time.time()
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
-        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.b.shape[0]))
+        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
 
         nonanticipative_mat = self.build_nonanticipative_matrix()
         # flip nonanticipative mat - constraint is on the elements not included
         nonanticipative_mat = 1 - nonanticipative_mat
-        nonanticipative_mat[:, self.get_certain_bus()] = 1
         self.constraints += [cp.multiply(self.z1, nonanticipative_mat) == 0]
 
         w0 = (self.B @ self._k) @ self.z0
-        w1 = self.B @ self._p2 @ np.linalg.pinv(self._A1) + self.B @ self._k @ self.z1
+        w1 = self.B @ self._p2 @ np.linalg.pinv(self._A1) + self.B @ self._k @ self.z1 @ self.z_to_b_map
         for j in range(self.B.shape[0]):
             self.constraints.append(-self.c[j] + w0[j] + (w1 @ self.b)[j]
                                     + self.omega_param * cp.norm((w1 @ self.projected_delta)[j], 2) <= 0)
 
         f = self.piecewise_costs.reshape(1, -1)
         Obj0 = f @ self._k @ self.z0
-        Obj1 = f @ (self._p2 @ np.linalg.pinv(self._A1)) + f @ self._k @ self.z1
+        Obj1 = f @ (self._p2 @ np.linalg.pinv(self._A1)) + f @ self._k @ self.z1 @ self.z_to_b_map
         self.constraints.append(-self.obj + Obj0 + Obj1 @ self.b
                                 + self.omega_param * cp.norm((Obj1 @ self.projected_delta), 2) <= 0)
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
 
-    def extract_solution_expermiental_opt_formulation(self):
+    def extract_solution_experimental_opt_formulation(self):
         if self.z1 is None:
             z1 = np.zeros((self.n_indep_per_t * self.t, self.b.shape[0]))
         else:
@@ -993,11 +1000,6 @@ class RobustModel(BaseOptModel):
         g.tanks_volume()
 
     def extract_solution(self):
-        if self.z1 is None:
-            z1 = np.zeros((self.n_indep_per_t * self.t, self.b.shape[0]))
-        else:
-            z1 = self.z1.value
-
         # nominal solution
         yt = {t: self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].value
                  + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ self.b
@@ -1028,8 +1030,6 @@ class RobustModel(BaseOptModel):
                    + [f"w {_}" for _ in range(self.n_gen)]
                    )
         df = pd.DataFrame(stacked_x, index=idx)
-        print(df)
-
         # x = np.hstack([stacked_x[:-self.n_gen].flatten('F'), stacked_x[-self.n_gen:].flatten('F')])
         # print(x)
         # df = pd.DataFrame({'Ax': self.A @ x, 'b': self.b})
@@ -1117,8 +1117,9 @@ class RobustModel(BaseOptModel):
                         - (self.x_by_sample[:, desal_idx, :] * self.wds.desal_power * self.wds_power_units_factor).sum(
                         axis=1)
                         - bus_power_consumption)
-            # x_bat_in = np.where(x_bat_in < 0, x_bat_in * (1 / bat_data["charge_eff"]),
-            #                     x_bat_in * bat_data["discharge_eff"])
+            if self.n_bat_vars == 2:
+                x_bat_in = np.where(x_bat_in < 0, x_bat_in * (1 / bat_data["charge_eff"]),
+                                    x_bat_in * bat_data["discharge_eff"])
             x_bat_in *= self.pds.pu_to_mw
 
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
@@ -1130,10 +1131,10 @@ class RobustModel(BaseOptModel):
             violations[bat_name] = bat_violations
 
         violations['total'] = violations.any(axis=1)
-        print(violations.sum(axis=0))
         g = graphs.OptGraphs(self, self.x_by_sample)
         g.tanks_volume()
         g.soc(soc_to_plot=soc)
+        # graphs.plot_mat(self.z1_val, t=self.t)
 
         wc_cost = self.problem.value
         avg_cost = costs.sum(axis=(1, 2)).mean()
