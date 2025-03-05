@@ -1,0 +1,14 @@
+name: "6_3-bus"
+pds_path: "data/pds-3-bus"
+wds_path: "data/wds-3-bus"
+t: 24
+opt_method: "ro"
+pw_segments: 4
+n_bat_vars: 1
+elimination_method: manual
+manual_indep_variables: [0, 3, 5, 6]
+omegas: [0.5, 1, 1.5, 2, 2.5, 3]
+export: true
+
+# θ0, θ1, θ2, gen0, gen1, bat_c, d0, t0
+#  0,  1,  2,   3,    4,    5,    6,  7

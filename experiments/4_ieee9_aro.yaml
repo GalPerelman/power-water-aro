@@ -1,0 +1,14 @@
+name: "4_ieee9"
+pds_path: "data/ieee9"
+wds_path: "data/desalination_wds"
+t: 24
+opt_method: "aro"
+pw_segments: 4
+n_bat_vars: 2
+elimination_method: manual
+manual_indep_variables: [0, 9, 10, 11, 12, 14, 15, 16, 17] # bus0, gen0, gen1, gen2, bat_charge, all combs, desal, pw
+omegas: [0.5, 1, 1.5, 2, 2.5, 3]
+export: true
+
+# θ0, θ1, θ2, θ3, θ4, θ5, θ6, θ7, θ8, gen0, gen1, gen2, bat_c, bat_d, comb0, comb1, comb2, desal0, tank0, tank1, pw0, pw1, pw2
+#  0,  1,  2,  3,  4,  5,  6,  7,  8,   9,   10,   11,   12,    13,    14,    15,    16,    17,     18,    19,    20,  21, 22

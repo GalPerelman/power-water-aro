@@ -1,4 +1,4 @@
 ﻿bus_id,name,min_gen_p,max_gen_p,min_gen_q,max_gen_q,gen_a,gen_b,gen_c,gen_type,ramping
-0,local_gen,10,250,-300,300,0.11,5,150,conventional,50
-1,local_gen,10,300,-300,300,0.085,1.2,600,conventional,50
-2,local_gen,10,270,-300,300,0.1225,1,335,conventional,50
+0,local_gen,10,250,-300,300,0.11,5,150,conventional,100
+1,local_gen,10,300,-300,300,0.085,1.2,600,conventional,100
+2,local_gen,10,270,-300,300,0.1225,1,335,conventional,100

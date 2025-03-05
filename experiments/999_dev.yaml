@@ -1,0 +1,30 @@
+name: "999_dev"
+pds_path: "data/ieee9"
+wds_path: "data/desalination_wds"
+t: 6
+opt_method: "aro"
+pw_segments: 4
+n_bat_vars: 1
+elimination_method: manual
+manual_indep_variables: [0, 9, 11, 12, 13, 14, 15, 16]
+omegas: [0.5, 1, 1.5, 2, 2.5, 3]
+export: false
+
+
+# ieee9
+#manual_indep_variables: [0, 9, 11, 12, 13, 14, 15, 16] # bus0, gen0, gen2, bat_charge, all combs, desal, pw
+
+
+#name: "999_dev"
+#pds_path: "data/pds-ewri"
+#wds_path: "data/wds-ewri"
+#t: 16
+#opt_method: "aro"
+#pw_segments: 4
+#n_bat_vars: 1
+#elimination_method: manual
+#manual_indep_variables: [0, 3, 4]
+#omegas: [1]
+#export: true
+# θ0, θ1, gen0, bat_c, d0, t0
+#  0,  1,   2,   3,    4,   5
