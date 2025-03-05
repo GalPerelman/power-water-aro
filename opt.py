@@ -598,6 +598,7 @@ class RobustModel(BaseOptModel):
         self.lb, self.ub = self.get_x_bounds()
         self.B = np.vstack([self.B, -np.eye(self.B.shape[1]), np.eye(self.B.shape[1])])
         self.c = np.hstack([self.c, -self.lb, self.ub])
+        self.B = sparse.csr_matrix(self.B)
 
         self.dep_idx, self.indep_idx = self.get_variables_to_eliminate(mat=self.A, method=self.elimination_method)
         print([int(_) for _ in self.indep_idx])
@@ -628,8 +629,8 @@ class RobustModel(BaseOptModel):
         self.p1[indep_relative_idx, :] = np.eye(len(self.indep_idx_t[0]))
         self.p2 = np.zeros((n_vars_per_t, len(self.dep_idx_t[0])))
         self.p2[dep_relative_idx, :] = np.eye(len(self.dep_idx_t[0]))
-        self.k1 = {t: self.p2 @ np.linalg.pinv(self.A1[t]) for t in range(self.t)}
-        self.k2 = {t: self.p1 - (self.p2 @ np.linalg.pinv(self.A1[t])) @ self.A2[t] for t in range(self.t)}
+        self.k1 = {t: sparse.csr_matrix(self.p2 @ np.linalg.pinv(self.A1[t])) for t in range(self.t)}
+        self.k2 = {t: sparse.csr_matrix(self.p1 - (self.p2 @ np.linalg.pinv(self.A1[t])) @ self.A2[t]) for t in range(self.t)}
 
         certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
         n_certain_bus_per_t = len(certain_bus_per_t)
@@ -642,6 +643,7 @@ class RobustModel(BaseOptModel):
             self.z_to_b_map = np.zeros((self.n_uncertain_per_t * self.t, self.b.shape[0]))
             self.z_to_b_map[:len(uncertain_bus), uncertain_bus] = np.eye(len(uncertain_bus))
             self.z_to_b_map[-self.n_tanks * self.t:, -self.n_tanks * self.t:] = np.eye(self.n_tanks * self.t)
+            self.z_to_b_map = sparse.csr_matrix(self.z_to_b_map)
 
         # complete matrices
         self._A1 = self.A[:, self.dep_idx]
