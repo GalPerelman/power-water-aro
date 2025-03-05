@@ -892,6 +892,59 @@ class RobustModel(BaseOptModel):
             self.z1_val = self.z1.value
         self.extract_solution()
 
+    def formulate_sparse_opt_problem(self):
+        """
+        Not in use
+        This was a try to write efficient formulation with minimal dimension of z1
+        The aim was to generate 1D variable and then multiply it by a matrix to arrange z1 in the desired 2d form
+        The run times were extremely long and the issue of dimensionality solved with formulate_opt_problem
+        based on cvxpy sparsity attribute
+        :return:
+        """
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        self.t_fromulation_start = time.time()
+
+        nonanticipative_mat = self.build_nonanticipative_matrix()
+        row_indices, col_indices = np.where(nonanticipative_mat)
+        z1_dim = len(row_indices)
+        self.z1_var = cp.Variable(z1_dim)
+        self.z0 = cp.Variable(self.n_indep_per_t * self.t)
+
+        positions = np.where(nonanticipative_mat == 1)
+        positions = list(zip(positions[0], positions[1]))
+        A = np.zeros((nonanticipative_mat.shape[0] * nonanticipative_mat.shape[1], z1_dim))
+        for idx, pos in enumerate(positions):
+            flat_index = pos[0] * nonanticipative_mat.shape[1] + pos[1]  # Convert 2D index to 1D
+            A[flat_index, idx] = 1
+
+        self.z1 = cp.reshape(A @ self.z1_var, (nonanticipative_mat.shape[0], nonanticipative_mat.shape[1]), order='C')
+        self.obj = cp.Variable(1)
+        self.omega_param = cp.Parameter(nonneg=True)
+        w0 = sum(
+            (self.B[:, self.t_cols[t]] @ self.k2[t]) @ self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)]
+            for t in range(self.t))
+        w1 = sum((self.B[:, self.t_cols[t]] @ self.k1[t] @ np.eye(len(self.b))[self.t_eq_rows[t]])
+                 + (self.B[:, self.t_cols[t]] @ self.k2[t])
+                 @ self.z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map
+                 for t in range(self.t))
+
+        for j in range(self.B.shape[0]):
+            self.constraints.append(-self.c[j] + w0[j] + (w1 @ self.b)[j]
+                                    + self.omega_param * cp.norm((w1 @ self.projected_delta)[j], 2) <= 0)
+
+        # formulate the objective function as constraint
+        f = self.piecewise_costs.reshape(1, -1)
+        Obj0 = sum((f[:, self.t_cols[t]] @ self.k2[t]) @ self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)]
+                   for t in range(self.t))
+        Obj1 = sum((f[:, self.t_cols[t]] @ self.k1[t] @ np.eye(len(self.b))[self.t_eq_rows[t]])
+                   + (f[:, self.t_cols[t]] @ self.k2[t])
+                   @ self.z1[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map
+                   for t in range(self.t))
+        self.constraints.append(-self.obj + Obj0 + Obj1 @ self.b
+                                + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
+
+        self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
+
     def read_solution(self, sol_path):
         with open(sol_path, "rb") as f:
             solution = pickle.load(f)
