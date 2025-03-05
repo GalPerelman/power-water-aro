@@ -10,6 +10,10 @@ class WDS:
         self.real_to_reactive = 0.75
         self.flows_factor = 1000
 
+        # parameters form params.yaml
+        self.input_power_units = None
+        self.desal_power = None
+
         # read other parameters
         with open(os.path.join(self.data_folder, 'params.yaml'), 'r') as f:
             params = yaml.safe_load(f)
