@@ -1,16 +1,16 @@
-import os
 import pickle
 import time
 import datetime
-import matplotlib.pyplot as plt
 import numpy as np
 import cvxpy as cp
 import pandas as pd
 import sympy as sp
 import scipy
-import copy
-import seaborn as sns
+from scipy import sparse
 
+import matplotlib.pyplot as plt
+
+import copy
 import gurobipy as gp
 from gurobipy import GRB
 
@@ -870,7 +870,18 @@ class RobustModel(BaseOptModel):
     def solve(self):
         self.omega_param.value = self.omega
         formulation_time = time.time() - self.t_fromulation_start
-        self.problem.solve(solver=cp.GUROBI, verbose=True, reoptimize=True, BarHomogeneous=1, NumericFocus=3, Threads=2)
+        self.problem.solve(
+            solver=cp.GUROBI,
+            # solver=cp.MOSEK,
+            verbose=True,
+            reoptimize=True,
+            canon_backend=cp.SCIPY_CANON_BACKEND,
+            # ignore_dpp=True,
+            BarHomogeneous=1, NumericFocus=1,  # for numeric stability
+            Threads=10,
+            BarConvTol=1e-3, FeasibilityTol=1e-4,  # for run time
+            OutputFlag=0
+                           )
         run_time = self.problem.solver_stats.solve_time
         print(f"Objective (WC): {self.problem.value} | Formulation time: {formulation_time:.2f} | Solver time: {run_time}")
 
@@ -880,7 +891,6 @@ class RobustModel(BaseOptModel):
         else:
             self.z1_val = self.z1.value
         self.extract_solution()
-        # self.extract_solution_()
 
     def read_solution(self, sol_path):
         with open(sol_path, "rb") as f:
