@@ -758,15 +758,17 @@ class RobustModel(BaseOptModel):
     def formulate_opt_problem(self):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         self.t_fromulation_start = time.time()
-        self.z0 = cp.Variable(self.n_indep_per_t * self.t)
-        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
-        self.obj = cp.Variable(1)
-        self.omega_param = cp.Parameter(nonneg=True)
 
         nonanticipative_mat = self.build_nonanticipative_matrix()
         # flip nonanticipative mat - constraint is on the elements not included
         nonanticipative_mat = 1 - nonanticipative_mat
-        self.constraints += [cp.multiply(self.z1, nonanticipative_mat) == 0]
+        # self.constraints += [cp.multiply(self.z1, nonanticipative_mat) == 0]
+
+        self.z0 = cp.Variable(self.n_indep_per_t * self.t)
+        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t),
+                              sparsity=np.where(nonanticipative_mat == 0))
+        self.obj = cp.Variable(1)
+        self.omega_param = cp.Parameter(nonneg=True)
 
         w0 = sum(
             (self.B[:, self.t_cols[t]] @ self.k2[t]) @ self.z0[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)]
