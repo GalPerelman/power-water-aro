@@ -586,6 +586,7 @@ class RobustModel(BaseOptModel):
         self.x = None
         self.x_by_sample = None
         self.n_indep_per_t = None
+        self.n_dep_per_t = None
         self.dep_idx_t, self.indep_idx_t = {}, {}
 
         # Ax <= b
@@ -620,6 +621,7 @@ class RobustModel(BaseOptModel):
             self.indep_idx_t[t] = sorted(list(set(self.indep_idx) & set(self.t_cols[t])))
 
         self.n_indep_per_t = len(self.indep_idx_t[0])
+        self.n_dep_per_t = len(self.dep_idx_t[0])
         self.A1 = {t: self.A[np.ix_(self.t_eq_rows[t], self.dep_idx_t[t])] for t in range(self.t)}
         self.A2 = {t: self.A[np.ix_(self.t_eq_rows[t], self.indep_idx_t[t])] for t in range(self.t)}
 
@@ -652,28 +654,29 @@ class RobustModel(BaseOptModel):
         self._p1[self.indep_idx, :] = np.eye(len(self.indep_idx))
         self._p2 = np.zeros((self.A.shape[1], len(self.dep_idx)))
         self._p2[self.dep_idx, :] = np.eye(len(self.dep_idx))
-        self._k1 = self._p2 @ np.linalg.pinv(self._A1)
-        self._k2 = self._p1 - (self._p2 @ np.linalg.pinv(self._A1)) @ self._A2
+        self._k1 = sparse.csr_matrix(self._p2 @ np.linalg.pinv(self._A1))
+        self._k2 = sparse.csr_matrix(self._p1 - (self._p2 @ np.linalg.pinv(self._A1)) @ self._A2)
         # self._k = self._p2 @ np.linalg.pinv(self._A1) @ self._A2
         self._k = self._p1 - (self._p2 @ np.linalg.pinv(self._A1) @ self._A2)
+
+    @staticmethod
+    def get_ldr_block(n, k, T, lags, lat):
+        total_size = (n * T, k * T)
+        mat = np.zeros(total_size)
+        for i in range(lags):
+            # Start filling from (lat + i) to respect the lat offset
+            for j in range(lat + i, T):
+                if (j - i) >= 1:  # Ensure that we are placing on correct diagonals below main
+                    start_row = j * n
+                    end_row = start_row + n
+                    start_col = (j - i - 1 - lat) * k
+                    end_col = start_col + k
+                    mat[start_row:end_row, start_col:end_col] = 1
+        return mat
 
     def build_nonanticipative_matrix(self, n_lags=None, lat=0):
         if n_lags is None:
             n_lags = self.t
-
-        def get_ldr_block(n, k, T, lags, lat):
-            total_size = (n * T, k * T)
-            mat = np.zeros(total_size)
-            for i in range(lags):
-                # Start filling from (lat + i) to respect the lat offset
-                for j in range(lat + i, T):
-                    if (j - i) >= 1:  # Ensure that we are placing on correct diagonals below main
-                        start_row = j * n
-                        end_row = start_row + n
-                        start_col = (j - i - 1 - lat) * k
-                        end_col = start_col + k
-                        mat[start_row:end_row, start_col:end_col] = 1
-            return mat
 
         # loads_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_bus, T=self.t, lags=n_lags, lat=lat)
         # dem_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=lat)
@@ -681,9 +684,9 @@ class RobustModel(BaseOptModel):
 
         certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
         n_certain_bus_per_t = len(certain_bus_per_t)
-        loads_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_bus - n_certain_bus_per_t, T=self.t, lags=n_lags,
+        loads_block = self.get_ldr_block(n=self.n_indep_per_t, k=self.n_bus - n_certain_bus_per_t, T=self.t, lags=n_lags,
                                     lat=self.pds_lat)
-        dem_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.wds_lat)
+        dem_block = self.get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.wds_lat)
         mat = np.block([loads_block, dem_block])
         return mat
 
@@ -753,6 +756,40 @@ class RobustModel(BaseOptModel):
                                 + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2)
                                 <= 0)
 
+        self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
+
+    def formulate_vectorized_opt_problem(self):
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        self.t_fromulation_start = time.time()
+
+        n_indep_no_pw = self.n_indep_per_t - self.n_gen
+        certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
+        n_uncertain_bus_per_t = self.n_bus - len(certain_bus_per_t)
+        loads_block = self.get_ldr_block(n=n_indep_no_pw, k=n_uncertain_bus_per_t, T=self.t, lags=self.t, lat=self.pds_lat)
+        dem_block = self.get_ldr_block(n=n_indep_no_pw, k=self.n_tanks, T=self.t, lags=self.t, lat=self.wds_lat)
+        pw_loads_block = self.get_ldr_block(n=self.n_gen, k=n_uncertain_bus_per_t, T=self.t, lags=self.t, lat=self.pds_lat)
+        pw_dem_block = self.get_ldr_block(n=self.n_gen, k=self.n_tanks, T=self.t, lags=self.t, lat=self.pds_lat)
+        nonanticipative_mat = np.block([[loads_block, dem_block], [pw_loads_block, pw_dem_block]])
+
+        # flip nonanticipative mat - constraint is on the elements not included
+        nonanticipative_mat = 1 - nonanticipative_mat
+
+        self.z0 = cp.Variable(self.n_indep_per_t * self.t)
+        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t),
+                              sparsity=np.where(nonanticipative_mat == 0))
+        self.obj = cp.Variable(1)
+        self.omega_param = cp.Parameter(nonneg=True)
+        print(type(self.B), type(self._k1), type(self._k2), type(self.z_to_b_map), type(self.projected_delta))
+        w0 = self.B @ self._k2 @ self.z0
+        w1 = self.B @ self._k1 + self.B @ self._k2 @ self.z1 @ self.z_to_b_map
+        constraint_vector = -self.c + w0 + w1 @ self.b + self.omega_param * cp.norm(w1 @ self.projected_delta, axis=1)
+        self.constraints.append(constraint_vector <= 0)
+
+        f = self.piecewise_costs.reshape(1, -1)
+        Obj0 = f @ self._k2 @ self.z0
+        Obj1 = f @ self._k1 + f @ self._k2 @ self.z1 @ self.z_to_b_map
+        self.constraints.append(
+            -self.obj + Obj0 + Obj1 @ self.b + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
 
     def formulate_opt_problem(self):
@@ -1076,12 +1113,22 @@ class RobustModel(BaseOptModel):
 
         sample = np.vstack([sample_loads - sample_pv, sample_dem])
 
-        yt = {t: self.z0_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].reshape(-1, 1)
-                 + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ sample
-              for t in range(self.t)}
+        # old approach - for formulation absed on time step decomposition
+        # yt = {t: self.z0_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].reshape(-1, 1)
+        #          + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ sample
+        #       for t in range(self.t)}
+        # xt = {t: self.k1[t] @ sample[self.t_eq_rows[t]] + self.k2[t] @ yt[t] for t in range(self.t)}
+        # self.x_by_sample = np.stack([_.T for _ in list(xt.values())], axis=-1)  # shape = (n, all_variables, T)
 
-        xt = {t: self.k1[t] @ sample[self.t_eq_rows[t]] + self.k2[t] @ yt[t] for t in range(self.t)}
-        self.x_by_sample = np.stack([_.T for _ in list(xt.values())], axis=-1)  # shape = (n, all_variables, T)
+        y = self.z0_val.reshape(-1, 1) + (self.z1_val @ self.z_to_b_map) @ sample
+        x = (self._k1 @ sample + self._k2 @ y).T
+
+        # the total number of variables per time step
+        n_vars_per_t = self.n_indep_per_t + self.n_dep_per_t
+        x_vars = x[:, :(n_vars_per_t - self.n_gen) * self.t].reshape(n, self.t, (n_vars_per_t - self.n_gen))
+        pw_vars = x[:, (n_vars_per_t - self.n_gen) * self.t:].reshape(n, self.t, self.n_gen)
+        self.x_by_sample = np.concatenate([x_vars, pw_vars], axis=-1)
+        self.x_by_sample = np.swapaxes(self.x_by_sample, 1, 2)
 
         costs = self.calculate_piecewise_linear_result(self.x_by_sample)
         print(f"Objective (AVG): {costs.sum(axis=(1, 2)).mean()}")
