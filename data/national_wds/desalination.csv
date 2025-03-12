@@ -1,0 +1,3 @@
+﻿idx,name,min_flow,max_flow,from,to
+0,D1,0,30000,0,T2
+1,D2,0,20000,0,T1

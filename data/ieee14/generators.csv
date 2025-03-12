@@ -1,0 +1,6 @@
+﻿bus_id,name,min_gen_p,max_gen_p,min_gen_q,max_gen_q,gen_a,gen_b,gen_c,gen_type,ramping
+0,A,0,332.4,0,10,0.043,20,0,conventional,50
+1,B,0,140,-40,50,0.25,20,0,conventional,50
+2,C,0,100,0,40,0.01,40,0,conventional,50
+5,D,0,100,-6,24,0.01,40,0,conventional,50
+7,E,0,100,-6,24,0.01,40,0,conventional,50

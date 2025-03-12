@@ -1,0 +1,6 @@
+name: "ieee14"
+input_power_units: "mw"
+nominal_voltage_kv: 230
+power_base_mva: 100
+active_demand_factor: 1
+reactive_demand_factor: 1

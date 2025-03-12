@@ -1,0 +1,4 @@
+,elevation,init_level,min_level,max_level,diameter,uncertain
+T1,40,4,0.5,10,190,1
+T2,80,5,0.5,10,100,1
+T3,200,4,0.5,10,113,1
