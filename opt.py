@@ -779,17 +779,60 @@ class RobustModel(BaseOptModel):
                               sparsity=np.where(nonanticipative_mat == 0))
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
-        print(type(self.B), type(self._k1), type(self._k2), type(self.z_to_b_map), type(self.projected_delta))
-        w0 = self.B @ self._k2 @ self.z0
-        w1 = self.B @ self._k1 + self.B @ self._k2 @ self.z1 @ self.z_to_b_map
+
+        B_k2 = self.B.dot(self._k2)
+        B_k1 = self.B.dot(self._k1)
+
+        B_k2 = B_k2.astype('float32')
+        B_k1 = B_k1.astype('float32')
+        self.z_to_b_map = self.z_to_b_map.astype('float32')
+        self.c = self.c.astype('float32')
+        self.b = self.b.astype('float32')
+        self.projected_delta = self.projected_delta.astype("float32")
+        w0 = B_k2 @ self.z0
+        w1 = B_k1 + B_k2 @ self.z1 @ self.z_to_b_map
+
+        # modeling 1 - fully vectorized
         constraint_vector = -self.c + w0 + w1 @ self.b + self.omega_param * cp.norm(w1 @ self.projected_delta, axis=1)
         self.constraints.append(constraint_vector <= 0)
 
+        # modeling 2 - SOC constraint
+        #  can be formulaized as: omega * cp.norm(w1 @ delta, axis=1) <= c - w0 - w1 @ b
+        # w1_b = w1 @ self.b
+        # t = cp.Variable(w1.shape[0])
+        # for j in range(w1.shape[0]):
+        #     self.constraints.append(cp.SOC(t[j], (w1 @ self.projected_delta)[j, :]))
+        # self.constraints.append(self.omega_param * t <= self.c - w0 - w1_b)
+
+        # modeling 3 - Epigraphs norm constraint
+        # w1_b = w1 @ self.b
+        # t = cp.Variable(w1.shape[0])
+        # self.constraints.append(cp.norm(w1 @ self.projected_delta, axis=1) <= t)
+        # self.constraints.append(self.omega_param * t <= self.c - w0 - w1_b)
+
+        # batch_size = 200
+        # w1_b = w1 @ self.b
+        # for i in range(0, self.B.shape[0], batch_size):
+        #     batch_indices = slice(i, min(i + batch_size, self.B.shape[0]))
+        #
+        #     # Compute the norm for the current batch.
+        #     # Instead of computing norm over all rows at once, we slice out only the current rows.
+        #     # (w1[batch_indices, :] @ self.projected_delta) has shape (batch_size, k)
+        #     norm_batch = cp.norm(w1[batch_indices, :] @ self.projected_delta, axis=1)
+        #
+        #     # Build the constraint for this batch:
+        #     c = -self.c[batch_indices] + w0[batch_indices] + w1_b[batch_indices] + self.omega_param * norm_batch <= 0
+        #     self.constraints.append(c)
+
         f = self.piecewise_costs.reshape(1, -1)
-        Obj0 = f @ self._k2 @ self.z0
-        Obj1 = f @ self._k1 + f @ self._k2 @ self.z1 @ self.z_to_b_map
+        f_k2 = f.dot(self._k2.toarray())
+        f_k1 = f.dot(self._k1.toarray())
+        f_k2 = sparse.csr_matrix(f_k2.astype('float32'))
+        f_k1 = sparse.csr_matrix(f_k1.astype('float32'))
+        Obj0 = f_k2 @ self.z0
+        Obj1 = f_k1 + f_k2 @ self.z1 @ self.z_to_b_map
         self.constraints.append(
-            -self.obj + Obj0 + Obj1 @ self.b + self.omega_param * cp.norm(Obj1 @ self.projected_delta, 2) <= 0)
+            -self.obj + Obj0 + Obj1 @ self.b + self.omega_param * cp.norm(Obj1 @ self.projected_delta, axis=1) <= 0)
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
 
     def formulate_opt_problem(self):
