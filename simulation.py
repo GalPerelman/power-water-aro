@@ -2,6 +2,7 @@ import math
 import pickle
 
 import matplotlib.pyplot as plt
+import scipy.stats
 from matplotlib import ticker as mtick
 import numpy as np
 import pandas as pd
@@ -9,9 +10,6 @@ import pandas as pd
 import graphs
 import opt
 import uncertainty
-from pds import PDS
-from wds import WDS
-from opt import RobustModel
 
 np.set_printoptions(linewidth=10 ** 5)
 np.set_printoptions(suppress=True)
@@ -24,7 +22,7 @@ pd.set_option('display.width', 1000)
 class Simulation(opt.RobustModel):
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                  z0, z1, plot,
-                 pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False, n=1000, **kwargs):
+                 pw_segments=None, n_bat_vars=1, solver_params=None, solver_display=False, n=1000, **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display)
 
@@ -46,25 +44,23 @@ class Simulation(opt.RobustModel):
         # get the nominal values - arranged according to the projected cov rows!
         # This means mu is not like the opt RHS
         loads = self.pds.dem_active.values[:, :self.t].flatten()
-        injections = np.multiply(self.pds.bus['max_pv_pu'].values, self.pds.max_gen_profile.values[:, :self.t].T).T.flatten()
+        injections = np.multiply(self.pds.bus['max_pv_pu'].values,
+                                 self.pds.max_gen_profile.values[:, :self.t].T).T.flatten()
         demands = self.wds.demands.values[:self.t, :].flatten('F')
         mu = np.hstack([loads, injections, demands])
         self.sample = uncertainty.draw_multivariate(mu=mu, cov=self.cov, n=self.n)
         self.sample[self.sample < 0] = 0
-        self.sample_loads = self.switch_leading_index(self.sample[:self.n_bus * self.t, :], self.n_bus)
-        self.sample_pv = self.switch_leading_index(self.sample[self.n_bus * self.t: 2 * self.n_bus * self.t, :], self.n_bus)
-        self.sample_dem = self.switch_leading_index(self.sample[2 * self.n_bus * self.t:, :], self.n_tanks)
+        self.sample_loads = self.switch_leading_index(self.sample[:self.n_bus * self.t, :], self.n_bus, n=self.n)
+        self.sample_pv = self.switch_leading_index(self.sample[self.n_bus * self.t: 2 * self.n_bus * self.t, :],
+                                                   self.n_bus, n=self.n)
+        self.sample_dem = self.switch_leading_index(self.sample[2 * self.n_bus * self.t:, :], self.n_tanks, n=self.n)
 
         self.sample_rhs = np.vstack([self.sample_loads - self.sample_pv, self.sample_dem])
 
         self.x_nominal, self.x_by_sample = self.extract_x()
         self.graphs = graphs.OptGraphs(self, self.x_by_sample)
         self.violations = pd.DataFrame()
-
-    def switch_leading_index(self, sample, k):
-        matrix_reshaped = np.reshape(sample, (k, self.t, self.n))
-        matrix_transposed = np.transpose(matrix_reshaped, (1, 0, 2))
-        return np.reshape(matrix_transposed, (self.t * k, self.n))
+        self.violations_penalty = {}
 
     def projected_cov(self):
         """
@@ -96,11 +92,10 @@ class Simulation(opt.RobustModel):
         return cov_prime
 
     def extract_x(self):
-        # old approach - for formulation absed on time step decomposition
+        # old approach - for formulation based on time step decomposition
         # yt = {t: self.z0_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].reshape(-1, 1)
         #          + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ self.sample_rhs
         #       for t in range(self.t)}
-        #
         # xt = {t: self.k1[t] @ self.sample_rhs[self.t_eq_rows[t]] + self.k2[t] @ yt[t] for t in range(self.t)}
         # x_by_sample = np.stack([_.T for _ in list(xt.values())], axis=-1)  # shape = (n, all_variables, T)
 
@@ -114,7 +109,8 @@ class Simulation(opt.RobustModel):
 
         # nominal solution
         yt = {t: self.z0_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].reshape(-1, 1)
-                 + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] @ self.z_to_b_map @ self.b.reshape(-1, 1)
+                 + self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :]
+                 @ self.z_to_b_map @ self.b.reshape(-1, 1)
               for t in range(self.t)}
         xt = {t: self.k1[t] @ self.b[self.t_eq_rows[t]].reshape(-1, 1) + self.k2[t] @ yt[t] for t in range(self.t)}
         x_nominal = np.stack([_.T for _ in list(xt.values())], axis=-1)
@@ -122,12 +118,7 @@ class Simulation(opt.RobustModel):
 
     def calculate_tank_volumes(self):
         for tank_idx, (tank_name, tank_data) in enumerate(self.wds.tanks.iterrows()):
-            if self.opt_method == "aro":
-                # use desalination and pumps for flows
-                flow_vars = self.x_by_sample[:, self.n_pds: self.n_pds + self.n_combs + self.n_desal, :]
-            else:
-                flow_vars = self.x_nominal[:, self.n_pds: self.n_pds + self.n_combs + self.n_desal, :]
-
+            flow_vars = self.x_by_sample[:, self.n_pds: self.n_pds + self.n_combs + self.n_desal, :]
             aux_arr = np.vstack([self.wds.combs['flow'].values.reshape(-1, 1), np.ones((self.n_desal, 1))])
             flows = aux_arr * flow_vars
 
@@ -155,20 +146,32 @@ class Simulation(opt.RobustModel):
             x_tank_in = self.x_nominal[:, self.n_pds + self.n_combs + self.n_desal + tank_idx, :]
             vol_by_tank_vars = (init_vol + np.tril(np.ones((self.t, self.t))) @ x_tank_in.T).T
 
-            # plt.figure()
-            # plt.plot(vol.T, 'C0', alpha=0.5)
-            # plt.hlines(self.wds.tanks.loc[tank_name, 'init_vol'], 0, self.t-1, 'k', linestyle='--')
-            # plt.hlines(self.wds.tanks.loc[tank_name, 'max_vol'], 0, self.t - 1, 'r')
-            # plt.hlines(self.wds.tanks.loc[tank_name, 'min_vol'], 0, self.t - 1, 'r')
-
             x_tank_in = self.x_by_sample[:, self.n_pds + self.n_combs + self.n_desal + tank_idx, :]
             tank_ub = np.tile(tank_data['max_vol'], self.t)
             tank_lb = np.tile(tank_data['min_vol'], self.t)
             tank_lb[-1] = tank_data['init_vol']
-            tank_violations = np.logical_xor(np.any(vol - tank_lb < 0, axis=1), np.any(tank_ub - vol < 0, axis=1))
+            tank_violations = np.logical_or(np.any(vol - tank_lb < 0, axis=1), np.any(tank_ub - vol < 0, axis=1))
             self.violations[tank_name] = tank_violations
-        if self.plot:
-            self.graphs.tanks_volume()
+
+            """
+            for case study I_3-bus_desalination_wds_aro:
+            Desalination power = 3000 kw = 3 mw
+            T1 average power for pumping = 0 water are supplied from the desalination plant
+            T2 average power for pumping = 1300 kw = 1.3 mw
+            total power (mw/m^3): T1=3, T2=4.3
+            power cost by average of two generators
+            gen_avg_power = 0.5 * (gen_min + gen_max) = 0.5 * (10 + 300) = 155 fpr both generators
+            average cost = a * gen_avg_power ^ 2 + b * gen_avg_power + c
+            average specific cost: gen1 = 3567.75 / 155 = 23, gen2 = 2828 / 155 = 18.24
+            price per mw = 0.5 * (23 + 18.24) = 20.63
+            price per m^3: T1 = 20.63 * 3 = 61.89, T2 = 20.63 * 4.3 = 88.71
+            """
+            penalty_cost = {'T1': 61.89, 'T2': 88.71}
+            tank_shortage = vol - tank_lb
+            tank_shortage[tank_shortage >= 0] = 0
+            tank_surplus = tank_ub - vol
+            tank_surplus[tank_surplus >= 0] = 0
+            self.violations_penalty[tank_name] = (-tank_shortage.sum()) * penalty_cost[tank_name] * 1.2
 
     def calculate_soc(self):
         ncols = max(1, int(math.ceil(math.sqrt(self.pds.n_batteries))))
@@ -181,6 +184,7 @@ class Simulation(opt.RobustModel):
         for bat_idx, (bat_name, bat_data) in enumerate(self.pds.batteries.iterrows()):
             if not self.n_bus + self.n_gen + bat_idx in self.indep_idx:
                 # if batteries are dependent variables - calculate SOC based on power (energy) balance
+                print("Batteries are DEPENDENT variables")
                 indep_gen_idx = [self.n_bus + _ for _ in range(self.n_gen) if self.n_bus + _ in self.indep_idx]
                 dep_gen_idx = [self.n_bus + _ for _ in range(self.n_gen) if self.n_bus + _ not in indep_gen_idx]
                 desal_idx = [self.n_pds + self.n_combs + _ for _ in range(self.n_desal)]
@@ -193,9 +197,10 @@ class Simulation(opt.RobustModel):
                 pv = self.sample_pv.reshape(self.t, self.n_bus, self.n).sum(axis=1).T
 
                 x_bat_in = (self.x_by_sample[:, indep_gen_idx, :].sum(axis=1)
-                            + self.x_nominal[:, dep_gen_idx, :].sum(axis=1)
+                            + self.x_by_sample[:, dep_gen_idx, :].sum(axis=1)
                             - pumps_power.sum(axis=1)
-                            - (self.x_nominal[:, desal_idx, :] * self.wds.desal_power * self.wds_power_units_factor).sum(axis=1)
+                            - (self.x_by_sample[:, desal_idx, :] * self.wds.desal_power * self.wds_power_units_factor)
+                            .sum(axis=1)
                             - loads + pv)
                 if self.n_bat_vars == 2:
                     x_bat_in = np.where(x_bat_in < 0, x_bat_in * (1 / bat_data["charge_eff"]),
@@ -204,6 +209,7 @@ class Simulation(opt.RobustModel):
 
             if self.n_bus + self.n_gen + bat_idx in self.indep_idx:
                 # if batteries are independent variables - calculate SOC based on the battery variables
+                print("Batteries are INDEPENDENT variables")
                 if self.n_bat_vars == 2:
                     x_bat_in = (self.x_by_sample[:, self.n_bus + self.n_gen + bat_idx, :]
                                  - self.x_by_sample[:, self.n_bus + self.n_gen + self.n_bat + bat_idx, :])
@@ -213,19 +219,16 @@ class Simulation(opt.RobustModel):
 
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
             soc = np.hstack([init_soc, (bat_data['init_storage'] + np.tril(np.ones((self.t, self.t))) @ x_bat_in.T).T])
-            # soc2 = (bat_data['init_storage'] + np.tril(np.ones((self.t, self.t))) @ x_bat_in2.T).T
             bat_ub = np.tile(bat_data['max_storage'], self.t + 1)
             bat_lb = np.tile(bat_data['min_storage'], self.t + 1)
             bat_lb[-1] = bat_data['init_storage']
 
-            lower_violations = np.minimum(soc - bat_lb, 0)
-            upper_violations = np.maximum(soc - bat_ub, 0)
-            bat_violations = np.logical_xor(np.any(soc - bat_lb + self.EPSILON < 0, axis=1),
-                                            np.any(bat_ub - soc < 0, axis=1))
-            self.violations[bat_name] = bat_violations
+            bat_violations = np.logical_or(np.any(soc - bat_lb + self.EPSILON < 0, axis=1),
+                                           np.any(bat_ub - soc + self.EPSILON < 0, axis=1))
+            self.violations[f'B{bat_name}'] = bat_violations
 
             if self.plot:
-                axes[bat_idx].plot(soc.T, 'C0', alpha=0.5)
+                axes[bat_idx].plot(soc.T, 'C0', alpha=0.3)
                 axes[bat_idx].hlines(bat_data['min_storage'], 0, self.t, 'r')
                 axes[bat_idx].hlines(bat_data['max_storage'], 0, self.t, 'r')
                 axes[bat_idx].hlines(bat_data['init_storage'], 0, self.t, 'k', linestyle='--')
@@ -235,32 +238,29 @@ class Simulation(opt.RobustModel):
             fig.text(0.5, 0.04, 'Time (hr)', ha='center')
             fig.text(0.04, 0.5, f'SOC ({self.pds.input_power_units.upper()}h)', va='center',
                      rotation='vertical')
+            fig.subplots_adjust(bottom=0.14, top=0.95)
 
     def calculate_costs(self):
         self.costs = self.calculate_piecewise_linear_result(self.x_by_sample).sum(axis=(1, 2))
-        if self.plot:
-            fig, ax = plt.subplots()
-            ax.hist(self.costs, bins=50, edgecolor='k')
-            ax.set_xlabel("Cost ($)")
-            ax.set_ylabel("Count")
-            ax.xaxis.set_major_formatter(mtick.ScalarFormatter(useOffset=False))
-            # ax.ticklabel_format(style='plain', axis='x')
-            ax.tick_params(axis='x', labelrotation=45)
-            plt.subplots_adjust(bottom=0.25, top=0.96)
+
+    def plot_costs(self):
+        fig, ax = plt.subplots()
+        ax.hist(self.costs, bins=50, edgecolor='k')
+        ax.set_xlabel("Cost ($)")
+        ax.set_ylabel("Count")
+        ax.xaxis.set_major_formatter(mtick.ScalarFormatter(useOffset=False))
+        # ax.ticklabel_format(style='plain', axis='x')
+        ax.tick_params(axis='x', labelrotation=45)
+        plt.subplots_adjust(bottom=0.25, top=0.96)
 
     def run(self):
         self.calculate_tank_volumes()
         self.calculate_soc()
         self.calculate_costs()
-        print(self.violations.sum(axis=0))
         violations_rate = self.violations.any(axis=1).sum() / self.n
         if self.plot:
-            g = graphs.OptGraphs(self, self.x_by_sample)
-            g.plot_generators(shared_y=True)
-            # fig, axes = plt.subplots(ncols=2)
-            # axes[0].imshow(self.z1[:, :self.n_bus * self.t])
-            # axes[1].imshow(self.z1[:, self.n_bus * self.t:])
-            # pd.DataFrame(self.z1).to_csv("z1.csv")
+            self.graphs.tanks_volume()
+            self.graphs.plot_generators(shared_y=False)
         return self.costs, violations_rate
 
 
@@ -270,55 +270,58 @@ def read_solution(sol_path):
         return solution
 
 
-def simulate_experiment(experiment_path, export=False, analyze_lags=False, plot=False):
+def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=False, plot=False,
+                        pds_latencies=None, wds_latencies=None):
     df = pd.DataFrame()
-    thetas = [0.5, 1, 1.5, 2, 2.5, 3]
-    fig, axes = plt.subplots(nrows=len(thetas), sharex=True)
     for i, theta in enumerate(thetas):
         try:
             solution = read_solution(sol_path=f"{experiment_path}_{theta}.pkl")
             sim = Simulation(**solution, plot=plot)
             costs, violations_rate = sim.run()
-            df = pd.concat([df, pd.DataFrame({"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
-                                              "solver_obj": solution["solver_obj"], "violations_rate": violations_rate,
-                                              "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat},
-                                             index=[len(df)])])
 
-            reliability = 1 - violations_rate
-            hist_ax = axes[len(thetas)-1-i].twinx()
-            counts, bins = np.histogram(costs, bins=25)
-            hist_ax.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5,
-                        zorder=1, align='edge', bottom=170)
-            axes[len(thetas) - 1 - i].scatter(costs.mean(), reliability, c='r', marker='o', facecolor='w', s=5 ** 2,
-                                              zorder=10)
-            hist_ax.set_yticks([])
-            hist_ax.set_ylim(0, 300)
+            violations_by_element = sim.violations.sum(axis=0)
+            sim_results = {"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(), "std_cost": costs.std(),
+                           "cost_skewness": scipy.stats.skew(costs),
+                           "solver_obj": solution["solver_obj"],
+                           "violations_rate": violations_rate,
+                           "violations_penalty": sum(sim.violations_penalty.values()),
+                           "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat}
+            sim_results = {**sim_results, **violations_by_element}
 
+            df = pd.concat([df, pd.DataFrame(sim_results, index=[len(df)])])
         except FileNotFoundError:
             pass
 
+        pds_latencies = [0, 2, 4, 6, 8, 10, 12] if pds_latencies is None else pds_latencies
+        wds_latencies = [0, 2, 4, 6, 8, 10, 12] if wds_latencies is None else wds_latencies
         if analyze_lags:
-            for pds_lat in [0, 1, 2, 3, 4, 5, 6, 12]:
-                for wds_lat in [0, 1, 2, 3, 4, 5, 6, 12]:
+            for pds_lat in pds_latencies:
+                for wds_lat in wds_latencies:
                     try:
-                        solution = read_solution(sol_path=f"{experiment_path}_{theta}_pdslat-{pds_lat}_wdslat-{wds_lat}.pkl")
-                        sim = Simulation(**solution, plot=False)
+                        sol_path = f"{experiment_path}_{theta}_pdslat-{pds_lat}_wdslat-{wds_lat}.pkl"
+                        solution = read_solution(sol_path=sol_path)
+                        sim = Simulation(**solution, plot=plot)
                         costs, violations_rate = sim.run()
-                        df = pd.concat([df, pd.DataFrame({"theta": theta, "avg_cost": costs.mean(),
-                                                          "max_cost": costs.max(),
-                                                          "solver_obj": solution["solver_obj"],
-                                                          "violations_rate": violations_rate,
-                                                          "pds_lat": pds_lat, "wds_lat": wds_lat},
-                                                         index=[len(df)])])
+
+                        violations_by_element = sim.violations.sum(axis=0)
+                        sim_results = {"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
+                                       "std_cost": costs.std(),
+                                       "cost_skewness": scipy.stats.skew(costs),
+                                       "solver_obj": solution["solver_obj"],
+                                       "violations_rate": violations_rate,
+                                       "violations_penalty": sum(sim.violations_penalty.values()),
+                                       "pds_lat": pds_lat, "wds_lat": wds_lat}
+                        sim_results = {**sim_results, **violations_by_element}
+
+                        df = pd.concat([df, pd.DataFrame(sim_results, index=[len(df)])])
                     except FileNotFoundError:
                         pass
 
     df["reliability"] = 1 - df["violations_rate"]
+    df["penalized_avg_obj"] = df["avg_cost"] + df["violations_penalty"]
     print(df)
     if export:
         df.to_csv(f"{experiment_path}_por.csv")
-
-    plt.subplots_adjust(hspace=0, left=0.16, right=0.96, top=0.92, bottom=0.14)
     return df
 
 
@@ -326,8 +329,8 @@ def plot_advanced_por(experiment_path):
     ro = pd.DataFrame()
     aro = pd.DataFrame()
     thetas = [0.5, 1, 1.5, 2, 2.5, 3]
-    # fig, axes = plt.subplots(nrows=len(thetas), sharex=True, sharey=True)
-    fig2, ax = plt.subplots()
+
+    fig, ax = plt.subplots()
     for i, theta in enumerate(thetas):
         solution = read_solution(sol_path=f"{experiment_path}_aro_{theta}.pkl")
         sim = Simulation(**solution, plot=False)
@@ -345,20 +348,10 @@ def plot_advanced_por(experiment_path):
                                             "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat, 'costs': [costs]},
                                            index=[len(ro)])])
 
-        reliability = 1 - violations_rate
-    #     hist_ax = axes[len(thetas) - 1 - i].twinx()
-    #     counts, bins = np.histogram(costs, bins=25)
-    #     hist_ax.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5,
-    #                 zorder=1, align='edge', bottom=170)
-    #     axes[len(thetas) - 1 - i].scatter(costs.mean(), reliability, c='r', marker='o', facecolor='w', s=5 ** 2,
-    #                                       zorder=10)
-    #     hist_ax.set_yticks([])
-    #     hist_ax.set_ylim(0, 300)
-    #
     ro["reliability"] = 1 - ro["violations_rate"]
     aro["reliability"] = 1 - aro["violations_rate"]
 
-    ax_max = 1.1
+    ax_max = 1.05
     hist_ax_max = 2000
     x1, x2 = ro['reliability'].min(), ax_max
     y1, y2 = 0.05 * hist_ax_max, hist_ax_max
@@ -368,23 +361,20 @@ def plot_advanced_por(experiment_path):
     ax.set_zorder(ax2.get_zorder() + 1)  # Makes ax on top of ax2
     ax.patch.set_visible(False)
     for i, theta in enumerate([0.5, 1, 1.5, 3]):
-        # hist_ax = axes[len(thetas) - 1 - i].twinx()
         c = aro.loc[aro['theta'] == theta, 'costs'].values[0]
         r = aro.loc[aro['theta'] == theta, 'reliability'].values[0]
 
         counts, bins = np.histogram(c, bins=25)
-        # hist_ax.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5, zorder=1)
-        # hist_ax.set_yticks([])
-        # hist_ax.set_ylim(0, 200)
-        # axes[len(thetas) - 1 - i].scatter(ro.loc[i, 'max_cost'], ro.loc[i, 'reliability'], label='RO', marker='o')
-        # axes[len(thetas) - 1 - i].plot(aro.loc[i, 'avg_cost'], aro.loc[i, 'reliability'], label='ARO', marker='o')
-
         ax2.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5, zorder=1,
                 bottom=m * (r - x1) + y1)
 
-    ax.plot(aro['avg_cost'], aro['reliability'], label='ARO-AVG', marker='o', zorder=10, c=graphs.COLORS["ARO"], mfc="w")
-    ax.plot(ro['avg_cost'], ro['reliability'], label='RO-AVG', marker='o', zorder=10, c=graphs.COLORS["RO-AVG"], mfc="w")
-    ax.plot(ro['max_cost'], ro['reliability'], label='RO-MAX', marker='o', zorder=10, c=graphs.COLORS["RO-MAX"], mfc="w")
+    def customized_plot(ax, x, y, label, color):
+        ax.plot(x, y, label=label, marker='o', zorder=10, c=color, mfc="w")
+        return ax
+
+    ax = customized_plot(ax, aro['avg_cost'], aro['reliability'], label='ARO-AVG', color=graphs.COLORS["ARO-AVG"])
+    ax = customized_plot(ax, ro['avg_cost'], ro['reliability'], label='RO-AVG', color=graphs.COLORS["RO-AVG"])
+    ax = customized_plot(ax, ro['max_cost'], ro['reliability'], label='RO-MAX', color=graphs.COLORS["RO-MAX"])
 
     ax2.set_ylim(0, hist_ax_max)
     ax2.set_yticks([])
@@ -392,56 +382,35 @@ def plot_advanced_por(experiment_path):
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
 
     ax.set_xlabel("Cost ($)")
-    ax.set_ylabel("Reliability (%)")
-    ax.legend(loc='lower left')
+    ax.set_ylabel("CSR (%)")
+    ax.legend(loc='lower right')
     plt.subplots_adjust(hspace=0, left=0.15, right=0.95, top=0.92, bottom=0.14)
-    print(ro)
-    print(aro)
 
 
 if __name__ == "__main__":
-    # df = simulate_experiment("output/1_ieee9_ro", export=True)
-    # df = simulate_experiment("output/1_ieee9_aro", export=False, plot=True)
+    thetas = [0.5, 1, 1.5, 2, 2.5, 3]
 
-    simulate_experiment("output/999_dev_aro", export=False)
-    # graphs.por(ro_results="output/1_ieee9_ro_por.csv", aro_results="output/1_ieee9_aro_por.csv")
-    # plot_advanced_por("output/1_ieee9")
-    # graphs.por(ro_results="output/1_ieee9_ro_por.csv", aro_results="output/999_dev_aro_por.csv")
-    #
-    # simulate_experiment("output/2_ieee9_ro")
-    # simulate_experiment("output/2_ieee9_aro")
+    # simulate and plot case study I
+    simulate_experiment("output/I_3-bus-desalination-wds_ro", thetas=thetas, export=True, plot=False)
+    simulate_experiment("output/I_3-bus-desalination-wds_aro", thetas=thetas, export=True, plot=False,
+                        analyze_lags=False, pds_latencies=None, wds_latencies=None)
+    graphs.por(ro_results="output/I_3-bus-desalination-wds_ro_por.csv",
+               aro_results="output/I_3-bus-desalination-wds_aro_por.csv")
+    plot_advanced_por("output/I_3-bus-desalination-wds")
 
-    # simulate_experiment("output/3_ieee9_ro")
-    # simulate_experiment("output/3_ieee9_aro")
-    # graphs.por(ro_results="output/3_ieee9_ro_por.csv", aro_results="output/3_ieee9_aro_por.csv")
+    # simulate and plot case study II
+    simulate_experiment("output/II_ieee9-national-wds_ro", thetas, export=True, plot=False)
+    simulate_experiment("output/II_ieee9-national-wds_aro", thetas, export=True, plot=False)
+    graphs.por(ro_results="output/II_ieee9-national-wds_ro_por.csv",
+               aro_results="output/II_ieee9-national-wds_aro_por.csv")
+    plot_advanced_por("output/II_ieee9-national-wds")
 
-    # simulate_experiment("output/5_ieee14_ro", export=True)
-    # simulate_experiment("output/5_ieee14_aro", export=True)
-    # graphs.por(ro_results="output/5_ieee14_ro_por.csv", aro_results="output/5_ieee14_aro_por.csv")
+    # latency analysis plot
+    graphs.analyze_latency(aro_path="output/I_3-bus-desalination-wds_aro_por.csv",
+                           ro_path="output/I_3-bus-desalination-wds_ro_por.csv")
 
-    # simulate_experiment("output/6_3-bus_ro", export=True)
-    # plot_advanced_por("output/6_3-bus")
-    # df = simulate_experiment("output/6_3-bus_aro", export=True, analyze_lags=True, plot=False)
-    # graphs.por(ro_results="output/6_3-bus_ro_por.csv", aro_results="output/6_3-bus_aro_por.csv")
-    # print(df)
+    # plot system behaviour for supplementary materials
+    simulate_experiment("output/I_3-bus-desalination-wds_aro", thetas=[1], export=False, plot=True)
+    simulate_experiment("output/I_sa_dep_bat_aro", thetas=[1], export=False, plot=True)
 
-    # simulate_experiment("output/4_ieee9_ro", export=True)
-    # simulate_experiment("output/3_ieee9_aro")
-    # graphs.por(ro_results="output/4_ieee9_ro_por.csv", aro_results="output/4_ieee9_aro_por.csv")
-    # solution = read_solution(sol_path="output/ro_ieee9_omega_1.pkl")
-    # print(solution['t'], solution["solver_obj"], solution["omega"])
-    # sim = Simulation(**solution)
-    # sim.calculate_tank_volumes()
-    # sim.calculate_soc()
-    # print(sim.violations.any(axis=1).sum() / sim.n)
-    # sim.calculate_costs()
-
-
-    # solution = read_solution(sol_path="output/ro_pds-ewri_omega_3.pkl")
-    # print(solution['t'], solution["solver_obj"], solution["omega"])
-    # sim = Simulation(**solution)
-    # sim.calculate_tank_volumes()
-    # sim.calculate_soc()
-    # print(sim.violations.any(axis=1).sum() / sim.n)
-    # sim.calculate_costs()
     plt.show()
