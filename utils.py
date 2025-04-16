@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import argparse
 
 POWER_UNITS = {"w": 1, "kw": 1000, "mw": 10 ** 6}
 
@@ -150,3 +151,13 @@ def single_var_non_anticipative_mat(t, lags, lat):
             mat[start_row:end_row, start_col:end_col] = 0
 
     return mat
+
+
+def int_or_float(value):
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"Expected an int or a float, but got {value!r}")
