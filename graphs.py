@@ -300,7 +300,61 @@ def analyze_latency(aro_path, ro_path):
     axes[0].zaxis.labelpad = 10
 
 
+def plot_nonanticipative_matrix():
+    def get_ldr_block(n, k, T, lags, lat):
+        total_size = (n * T, k * T)
+        mat = np.zeros(total_size)
+        for i in range(lags):
+            # Start filling from (lat + i) to respect the lat offset
+            for j in range(lat + i, T):
+                if (j - i) >= 1:  # Ensure that we are placing on correct diagonals below main
+                    start_row = j * n
+                    end_row = start_row + n
+                    start_col = (j - i - 1 - lat) * k
+                    end_col = start_col + k
+                    mat[start_row:end_row, start_col:end_col] = 1
+        return mat
+
+    t = 12
+    n, k = 1, 2
+    lat = 0
+    lags = t
+    mat = get_ldr_block(n=n, k=k, T=t, lags=lags, lat=lat)
+
+    fig, axes = plt.subplots(ncols=3, figsize=(14, 4))
+    axes[0].imshow(get_ldr_block(n=n, k=k, T=t, lags=t, lat=0), cmap='Greys', interpolation='none')
+    axes[1].imshow(get_ldr_block(n=n, k=k, T=t, lags=4, lat=0), cmap='Greys', interpolation='none')
+    axes[2].imshow(get_ldr_block(n=n, k=k, T=t, lags=t, lat=4), cmap='Greys', interpolation='none')
+    for ax in axes:
+        minor_ticks_x = np.arange(-0.5, mat.shape[1], 1)
+        minor_ticks_y = np.arange(-0.5, mat.shape[0], 1)
+        ax.set_xticks(minor_ticks_x, minor=True)
+        ax.set_yticks(minor_ticks_y, minor=True)
+        ax.tick_params(axis='x', which='minor', bottom=False)
+        ax.tick_params(axis='y', which='minor', left=False)
+        ax.grid(which='minor', color='lightgrey', linestyle='-', linewidth=0.5)
+
+        major_ticks_x = np.arange(0, mat.shape[1], 2)
+        major_ticks_y = np.arange(0, mat.shape[0], 2)
+        ax.set_xticks(major_ticks_x)
+        ax.set_yticks(major_ticks_y)
+        ax.set_xticklabels(major_ticks_x)
+        ax.set_yticklabels(major_ticks_y)
+
+    # legend_elements = [
+    #     Line2D([0], [0], marker='s', color='w', markerfacecolor='black',
+    #            markeredgecolor='k', markersize=10, label='1'),
+    #     Line2D([0], [0], marker='s', color='w', markerfacecolor='white',
+    #            markeredgecolor='k', markersize=10, label='0')
+    # ]
+    axes[0].text(x=0.01, y=1.06, s=f"(a)", fontsize=12, transform=axes[0].transAxes)
+    axes[1].text(x=0.01, y=1.06, s=f"(b)", fontsize=12, transform=axes[1].transAxes)
+    axes[2].text(x=0.01, y=1.06, s=f"(c)", fontsize=12, transform=axes[2].transAxes)
+
+    # plt.legend(handles=legend_elements, bbox_to_anchor=(0.78, 0.98), loc='upper left')
+    fig.subplots_adjust(wspace=0.1)
+
 
 if __name__ == "__main__":
-    analyze_latency(aro_path="output/6_3-bus_aro_por.csv", ro_path="output/6_3-bus_ro_por.csv")
+    plot_nonanticipative_matrix()
     plt.show()
