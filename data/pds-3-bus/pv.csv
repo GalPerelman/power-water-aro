@@ -1,2 +1,2 @@
 ﻿bus_id,name,min_pv,max_pv,ramping
-1,pv,0,50,50
+0,pv,0,50,25
