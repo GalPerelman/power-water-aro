@@ -16,7 +16,7 @@ Once the virtual environment is setup and activated,</br>
 Install the dependencies by running the following command:
 `pip install -r requirements.txt`</br>
 
-#### Run the code
+### Run the code
 To run an experiment, select a configuration file from the experiments directory and run the following:</br>
 `python main.py --config_path experiments/I_3-bus_desalination_wds_aro.yaml --command experiment`</br>
 To run a latency analysis, run the following:</br>
