@@ -8,12 +8,8 @@ import sympy as sp
 import scipy
 from scipy import sparse
 
-import matplotlib.pyplot as plt
-
 import copy
 import gurobipy as gp
-from gurobipy import GRB
-
 import graphs
 import utils
 import uncertainty
@@ -80,6 +76,11 @@ class BaseOptModel:
         self.t_cols, self.t_eq_rows = self.get_entries_by_t()
 
     def manually_set_dep_columns(self):
+        """
+        not in use:
+        experimental - check the impact of different independent sets
+        to define independent variables - use the experiment yaml configurations
+        """
         bus_angles = [_ for _ in range(self.n_bus)]
         generators = [self.n_bus + _ for _ in range(self.n_gen)]
         bat_charge = [self.n_bus + self.n_gen + _ for _ in range(self.n_bat)]
@@ -94,7 +95,6 @@ class BaseOptModel:
         # indep_cols = [0] + generators + combs + desal + pw  # ieee9 case study - 2
         # indep_cols = [0] + [generators[0]] + bat_charge + bat_discharge + combs + desal + pw  # ieee9 case study - 3
         # indep_cols = [0] + generators[:-1] + bat_charge + combs + desal + pw  # ewri case study
-        # indep_cols = bus_angles + generators + combs + desal + pw  # set 3
         dep_cols = [_ for _ in range(self.n_tot) if _ not in indep_cols]
         return indep_cols, dep_cols
 
@@ -511,67 +511,37 @@ class StandardDCPF(BaseOptModel):
         return obj, status, solver_time
 
 
-class RODCPF(BaseOptModel):
-    """
-    variables are dependent on the equality constraints RHS
-    x_dep = (A_dep)^-1 * (b - A_indep) * x_indep
-    Therefore, before decalring x, the RHS is updated to include uncertainty
-    """
-    def __init__(self, pds, wds, t, omega, pw_segments=None, solver_params=None, solver_display=False):
-        super().__init__(pds, wds, t, omega, pw_segments, solver_params, solver_display)
-
-        self.dep_idx, self.indep_idx = self.get_variables_to_eliminate(method='qr')
-        self.cov, self.delta = uncertainty.affine_mat(self.pds, self.wds, self.t)
-        self.uncertain_rhs = self.add_rhs_uncertainty()
-
-        self.lb, self.ub = self.get_x_bounds()
-        self.x = self.declare_variables()
-        self.formulate()
-
-    def add_rhs_uncertainty(self):
-        k = self.n_bus * self.t  # number of bus power balance constraints
-        load_norm_terms = [self.omega * cp.norm(self.delta[i], 2) for i in range(k)]
-        pv_norm_terms = [self.omega * cp.norm(self.delta[i + k], 2) for i in range(k)]
-
-        stacked_rhs = cp.vstack([self.eq_rhs[i] + load_norm_terms[i] - pv_norm_terms[i] for i in range(k)])
-        stacked_rhs = cp.vstack([stacked_rhs, np.zeros((self.t, 1))])  # add zeros for the ref bus = 0 constraints
-        uncertain_rhs = cp.reshape(stacked_rhs, (self.eq_rhs.shape[0],))
-        return uncertain_rhs
-
-    def declare_variables(self):
-        y = cp.Variable(len(self.indep_idx))
-        # extend _x to an expression includes all the decision variables (dependent and independent)
-        p1 = np.zeros((self.eq_mat.shape[1], len(self.dep_idx)))
-        p1[self.dep_idx, :] = np.eye(len(self.dep_idx))
-        p2 = np.zeros((self.eq_mat.shape[1], len(self.indep_idx)))
-        p2[self.indep_idx, :] = np.eye(len(self.indep_idx))
-        x = (p1 @ np.linalg.pinv(self.eq_mat[:, self.dep_idx])
-             @ (self.uncertain_rhs - self.eq_mat[:, self.indep_idx] @ y) + p2 @ y)
-
-        self.constraints += [x <= self.ub, x >= self.lb]
-        return x
-
-    def formulate(self):
-        for (name_mat, mat), (name_rhs, rhs) in zip(self.ineq_mat.items(), self.ineq_rhs.items()):
-            self.constraints.append(mat @ self.x <= rhs)
-
-
 class RobustModel(BaseOptModel):
+    """
+    Robust and Adjustable Robust Optimization
+    """
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables=None,
                  pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False, pds_lat=0, wds_lat=0,
-                 **kwargs):
+                 plot=False, **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display, **kwargs)
 
         self.pds_lat = pds_lat
         self.wds_lat = wds_lat
+        self.plot = plot
 
+        # matrices for time based formulation
         self.p1 = None
         self.p2 = None
         self.k1 = None
         self.k2 = None
         self.A1 = None
         self.A2 = None
+        # full matrices for vectorized formulation
+        self._A1 = None
+        self._A2 = None
+        self._p1 = None
+        self._p2 = None
+        self._k1 = None
+        self._k2 = None
+        self._k = None
+
+        self.t_formulation_start = None
         self.z0 = None
         self.z1 = None
         self.z0_val = None
@@ -602,10 +572,7 @@ class RobustModel(BaseOptModel):
         self.B = sparse.csr_matrix(self.B)
 
         self.dep_idx, self.indep_idx = self.get_variables_to_eliminate(mat=self.A, method=self.elimination_method)
-        print([int(_) for _ in self.indep_idx])
-
         self.cov, self.delta = uncertainty.affine_mat(self.pds, self.wds, self.t)
-
         r = self.project_u_to_rhs()  # r is the projection matrix
         projected_cov = r @ self.cov @ r.T
         self.projected_delta = uncertainty.cholesky_with_zeros(projected_cov)
@@ -613,7 +580,7 @@ class RobustModel(BaseOptModel):
 
     def export_matrix(self):
         pd.DataFrame(np.hstack([self.A, self.b.reshape(-1, 1)])).to_csv("eq_mat.csv")
-        pd.DataFrame(np.hstack([self.B, self.c.reshape(-1, 1)])).to_csv("ineq_mat.csv")
+        pd.DataFrame(np.hstack([self.B.toarray(), self.c.reshape(-1, 1)])).to_csv("ineq_mat.csv")
 
     def do_math(self):
         for t in range(self.t):
@@ -678,14 +645,10 @@ class RobustModel(BaseOptModel):
         if n_lags is None:
             n_lags = self.t
 
-        # loads_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_bus, T=self.t, lags=n_lags, lat=lat)
-        # dem_block = get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=lat)
-        # mat = np.block([loads_block, dem_block])
-
         certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
         n_certain_bus_per_t = len(certain_bus_per_t)
-        loads_block = self.get_ldr_block(n=self.n_indep_per_t, k=self.n_bus - n_certain_bus_per_t, T=self.t, lags=n_lags,
-                                    lat=self.pds_lat)
+        loads_block = self.get_ldr_block(n=self.n_indep_per_t, k=self.n_bus - n_certain_bus_per_t, T=self.t,
+                                         lags=n_lags, lat=self.pds_lat)
         dem_block = self.get_ldr_block(n=self.n_indep_per_t, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.wds_lat)
         mat = np.block([loads_block, dem_block])
         return mat
@@ -694,11 +657,6 @@ class RobustModel(BaseOptModel):
         """
         get the indexes of buses with no loads and no pv - rhs should be 0 with no uncertainty
         """
-        # load_std = pd.read_csv(os.path.join(self.pds.data_folder, 'dem_active_power_std.csv'), index_col=0).iloc[:,
-        #            :self.t] * self.pds.to_pu
-        # pv_std = (pd.read_csv(os.path.join(self.pds.data_folder, 'pv_std.csv'), index_col=0).iloc[:, :self.t].T
-        #           * self.pds.bus['max_pv_pu'].values).T
-
         certain_load_idx = np.where(self.pds.dem_active_std.iloc[:, :self.t].values.flatten('F') == 0)[0]
         certain_pv_idx = np.where(self.pds.pv_std[:, :self.t].flatten('F') == 0)[0]
         certain_idx = list(set(certain_load_idx) & set(certain_pv_idx))
@@ -730,7 +688,7 @@ class RobustModel(BaseOptModel):
 
     def formulate_ro(self):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        self.t_fromulation_start = time.time()
+        self.t_formulation_start = time.time()
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
@@ -760,20 +718,20 @@ class RobustModel(BaseOptModel):
 
     def formulate_vectorized_opt_problem(self):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        self.t_fromulation_start = time.time()
+        self.t_formulation_start = time.time()
 
+        n_lags = self.t
         n_indep_no_pw = self.n_indep_per_t - self.n_gen
         certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
         n_uncertain_bus_per_t = self.n_bus - len(certain_bus_per_t)
-        loads_block = self.get_ldr_block(n=n_indep_no_pw, k=n_uncertain_bus_per_t, T=self.t, lags=self.t, lat=self.pds_lat)
-        dem_block = self.get_ldr_block(n=n_indep_no_pw, k=self.n_tanks, T=self.t, lags=self.t, lat=self.wds_lat)
-        pw_loads_block = self.get_ldr_block(n=self.n_gen, k=n_uncertain_bus_per_t, T=self.t, lags=self.t, lat=self.pds_lat)
-        pw_dem_block = self.get_ldr_block(n=self.n_gen, k=self.n_tanks, T=self.t, lags=self.t, lat=self.pds_lat)
+        loads_block = self.get_ldr_block(n=n_indep_no_pw, k=n_uncertain_bus_per_t, T=self.t, lags=n_lags, lat=self.pds_lat)
+        dem_block = self.get_ldr_block(n=n_indep_no_pw, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.wds_lat)
+        pw_loads_block = self.get_ldr_block(n=self.n_gen, k=n_uncertain_bus_per_t, T=self.t, lags=n_lags, lat=self.pds_lat)
+        pw_dem_block = self.get_ldr_block(n=self.n_gen, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.pds_lat)
         nonanticipative_mat = np.block([[loads_block, dem_block], [pw_loads_block, pw_dem_block]])
 
         # flip nonanticipative mat - constraint is on the elements not included
         nonanticipative_mat = 1 - nonanticipative_mat
-
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t),
                               sparsity=np.where(nonanticipative_mat == 0))
@@ -788,13 +746,16 @@ class RobustModel(BaseOptModel):
         self.z_to_b_map = self.z_to_b_map.astype('float32')
         self.c = self.c.astype('float32')
         self.b = self.b.astype('float32')
-        self.projected_delta = self.projected_delta.astype("float32")
+        self.projected_delta = sparse.csr_matrix(self.projected_delta.astype("float32"))
         w0 = B_k2 @ self.z0
         w1 = B_k1 + B_k2 @ self.z1 @ self.z_to_b_map
 
         # modeling 1 - fully vectorized
         constraint_vector = -self.c + w0 + w1 @ self.b + self.omega_param * cp.norm(w1 @ self.projected_delta, axis=1)
         self.constraints.append(constraint_vector <= 0)
+
+        if self.opt_method == 'ro' or self.opt_method == 'det':
+            self.constraints.append(self.z1 == 0)
 
         # modeling 2 - SOC constraint
         #  can be formulaized as: omega * cp.norm(w1 @ delta, axis=1) <= c - w0 - w1 @ b
@@ -810,7 +771,8 @@ class RobustModel(BaseOptModel):
         # self.constraints.append(cp.norm(w1 @ self.projected_delta, axis=1) <= t)
         # self.constraints.append(self.omega_param * t <= self.c - w0 - w1_b)
 
-        # batch_size = 200
+        # modeling 4 - split constraints to batches of rows - control the tradeoff between memory usage and run times
+        # batch_size = 100
         # w1_b = w1 @ self.b
         # for i in range(0, self.B.shape[0], batch_size):
         #     batch_indices = slice(i, min(i + batch_size, self.B.shape[0]))
@@ -836,13 +798,15 @@ class RobustModel(BaseOptModel):
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
 
     def formulate_opt_problem(self):
+        """
+        Not in use: old version where formulation is done by summing time periods components
+        """
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        self.t_fromulation_start = time.time()
+        self.t_formulation_start = time.time()
 
         nonanticipative_mat = self.build_nonanticipative_matrix()
         # flip nonanticipative mat - constraint is on the elements not included
         nonanticipative_mat = 1 - nonanticipative_mat
-        # self.constraints += [cp.multiply(self.z1, nonanticipative_mat) == 0]
 
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t),
@@ -877,8 +841,11 @@ class RobustModel(BaseOptModel):
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
 
     def formulate_reduced_opt_problem(self):
+        """
+        not in use - old version
+        """
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        self.t_fromulation_start = time.time()
+        self.t_formulation_start = time.time()
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
@@ -890,8 +857,6 @@ class RobustModel(BaseOptModel):
                 self.z1[t] = cp.Variable((self.n_indep_per_t, self.n_uncertain_per_t * t))
                 self.ldr_to_z_map[t] = np.zeros((self.n_uncertain_per_t * t, self.n_uncertain_per_t * self.t))
                 uncertain_bus = [_ for _ in range(self.n_bus * t) if _ not in self.get_certain_bus()]
-                # self._z1[t][:len(uncertain_bus), uncertain_bus] = np.eye(len(uncertain_bus))
-                # self._z1[t][-self.n_tanks * t:, -self.n_tanks * t:] = np.eye(self.n_tanks * t)
                 self.ldr_to_z_map[t][:len(uncertain_bus), :len(uncertain_bus)] = np.eye(len(uncertain_bus))
                 self.ldr_to_z_map[t][-self.n_tanks * t:,
                                     self.n_uncertain_bus_per_t * self.t:
@@ -949,13 +914,12 @@ class RobustModel(BaseOptModel):
 
     def solve(self):
         self.omega_param.value = self.omega
-        formulation_time = time.time() - self.t_fromulation_start
+        formulation_time = time.time() - self.t_formulation_start
         self.problem.solve(
             solver=cp.GUROBI,
-            # solver=cp.MOSEK,
-            verbose=True,
+            verbose=0,
             reoptimize=True,
-            canon_backend=cp.SCIPY_CANON_BACKEND,
+            # canon_backend=cp.SCIPY_CANON_BACKEND,
             # ignore_dpp=True,
             BarHomogeneous=1, NumericFocus=1,  # for numeric stability
             Threads=10,
@@ -963,7 +927,8 @@ class RobustModel(BaseOptModel):
             OutputFlag=0
                            )
         run_time = self.problem.solver_stats.solve_time
-        print(f"Objective (WC): {self.problem.value} | Formulation time: {formulation_time:.2f} | Solver time: {run_time}")
+        print(f"Objective (WC): {self.problem.value} | Formulation time: {formulation_time:.2f} "
+              f"| Solver time: {run_time}")
 
         self.z0_val = self.z0.value
         if self.z1 is None:
@@ -975,7 +940,8 @@ class RobustModel(BaseOptModel):
             self.z1_val = np.zeros((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
             for t in range(self.t):
                 if t > 0:
-                    self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :] = self.z1[t].value @ self.ldr_to_z_map[t]
+                    self.z1_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1), :]\
+                        = self.z1[t].value @ self.ldr_to_z_map[t]
         else:
             self.z1_val = self.z1.value
         self.extract_solution()
@@ -990,12 +956,12 @@ class RobustModel(BaseOptModel):
         :return:
         """
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        self.t_fromulation_start = time.time()
+        self.t_formulation_start = time.time()
 
         nonanticipative_mat = self.build_nonanticipative_matrix()
         row_indices, col_indices = np.where(nonanticipative_mat)
         z1_dim = len(row_indices)
-        self.z1_var = cp.Variable(z1_dim)
+        z1_var = cp.Variable(z1_dim)
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
 
         positions = np.where(nonanticipative_mat == 1)
@@ -1005,7 +971,7 @@ class RobustModel(BaseOptModel):
             flat_index = pos[0] * nonanticipative_mat.shape[1] + pos[1]  # Convert 2D index to 1D
             A[flat_index, idx] = 1
 
-        self.z1 = cp.reshape(A @ self.z1_var, (nonanticipative_mat.shape[0], nonanticipative_mat.shape[1]), order='C')
+        self.z1 = cp.reshape(A @ z1_var, (nonanticipative_mat.shape[0], nonanticipative_mat.shape[1]), order='C')
         self.obj = cp.Variable(1)
         self.omega_param = cp.Parameter(nonneg=True)
         w0 = sum(
@@ -1041,7 +1007,7 @@ class RobustModel(BaseOptModel):
 
     def experimental_opt_formulation(self):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        self.t_fromulation_start = time.time()
+        self.t_formulation_start = time.time()
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
         self.obj = cp.Variable(1)
@@ -1111,9 +1077,12 @@ class RobustModel(BaseOptModel):
                    )
         df = pd.DataFrame(stacked_x, index=idx)
         # x = np.hstack([stacked_x[:-self.n_gen].flatten('F'), stacked_x[-self.n_gen:].flatten('F')])
-        # print(x)
         # df = pd.DataFrame({'Ax': self.A @ x, 'b': self.b})
-        # print(df)
+
+    def switch_leading_index(self, sample, k, n):
+        matrix_reshaped = np.reshape(sample, (k, self.t, n))
+        matrix_transposed = np.transpose(matrix_reshaped, (1, 0, 2))
+        return np.reshape(matrix_transposed, (self.t * k, n))
 
     def analyze_solution(self, n):
         def projected_cov():
@@ -1143,18 +1112,29 @@ class RobustModel(BaseOptModel):
 
             return mat @ self.cov @ mat
 
-        loads, injections, demands = self.get_nominal_rhs()
+        # loads, injections, demands = self.get_nominal_rhs()
+        # mu = np.hstack([loads, injections, demands])
+        # zero_idx = np.where(mu == 0)[0]
+        # cov_prime = projected_cov()
+        # sample = uncertainty.draw_multivariate(mu=mu, cov=cov_prime, n=n)
+        # sample[zero_idx, :] = 0
+        #
+        # sample_loads = sample[:self.n_bus * self.t, :]
+        # sample_pv = sample[self.n_bus * self.t: self.n_bus * self.t * 2, :]
+        # sample_dem = sample[self.n_bus * self.t * 2:, :]
+        # sample = np.vstack([sample_loads - sample_pv, sample_dem])
+
+        loads = self.pds.dem_active.values[:, :self.t].flatten()
+        injections = np.multiply(self.pds.bus['max_pv_pu'].values, self.pds.max_gen_profile.values[:, :self.t].T).T.flatten()
+        demands = self.wds.demands.values[:self.t, :].flatten('F')
         mu = np.hstack([loads, injections, demands])
-        zero_idx = np.where(mu == 0)[0]
-        cov_prime = projected_cov()
-        sample = uncertainty.draw_multivariate(mu=mu, cov=cov_prime, n=n)
-        sample[zero_idx, :] = 0
-
-        sample_loads = sample[:self.n_bus * self.t, :]
-        sample_pv = sample[self.n_bus * self.t: self.n_bus * self.t * 2, :]
-        sample_dem = sample[self.n_bus * self.t * 2:, :]
-
+        sample = uncertainty.draw_multivariate(mu=mu, cov=self.cov, n=n)
+        sample[sample < 0] = 0
+        sample_loads = self.switch_leading_index(sample[:self.n_bus * self.t, :], self.n_bus, n=n)
+        sample_pv = self.switch_leading_index(sample[self.n_bus * self.t: 2 * self.n_bus * self.t, :], self.n_bus, n=n)
+        sample_dem = self.switch_leading_index(sample[2 * self.n_bus * self.t:, :], self.n_tanks, n=n)
         sample = np.vstack([sample_loads - sample_pv, sample_dem])
+
 
         # old approach - for formulation absed on time step decomposition
         # yt = {t: self.z0_val[self.n_indep_per_t * t: self.n_indep_per_t * (t + 1)].reshape(-1, 1)
@@ -1172,7 +1152,6 @@ class RobustModel(BaseOptModel):
         pw_vars = x[:, (n_vars_per_t - self.n_gen) * self.t:].reshape(n, self.t, self.n_gen)
         self.x_by_sample = np.concatenate([x_vars, pw_vars], axis=-1)
         self.x_by_sample = np.swapaxes(self.x_by_sample, 1, 2)
-
         costs = self.calculate_piecewise_linear_result(self.x_by_sample)
         print(f"Objective (AVG): {costs.sum(axis=(1, 2)).mean()}")
 
@@ -1185,7 +1164,7 @@ class RobustModel(BaseOptModel):
             tank_ub = np.tile(tank_data['max_vol'], self.t + 1)
             tank_lb = np.tile(tank_data['min_vol'], self.t + 1)
             tank_lb[-1] = tank_data['init_vol']
-            tank_violations = np.logical_xor(np.any(vol - tank_lb < 0, axis=1), np.any(tank_ub - vol < 0, axis=1))
+            tank_violations = np.logical_or(np.any(vol - tank_lb < 0, axis=1), np.any(tank_ub - vol < 0, axis=1))
             violations[tank_name] = tank_violations
 
         for bat_idx, (bat_name, bat_data) in enumerate(self.pds.batteries.iterrows()):
@@ -1217,19 +1196,19 @@ class RobustModel(BaseOptModel):
             bat_ub = np.tile(bat_data['max_storage'], self.t + 1)
             bat_lb = np.tile(bat_data['min_storage'], self.t + 1)
             bat_lb[-1] = bat_data['init_storage'] - self.EPSILON
-            bat_violations = np.logical_xor(np.any(soc - bat_lb < 0, axis=1), np.any(bat_ub - soc < 0, axis=1))
+            bat_violations = np.logical_or(np.any(soc - bat_lb < 0, axis=1), np.any(bat_ub - soc < 0, axis=1))
             violations[bat_name] = bat_violations
 
         violations['total'] = violations.any(axis=1)
-        g = graphs.OptGraphs(self, self.x_by_sample)
-        g.tanks_volume()
-        g.soc(soc_to_plot=soc)
-        # graphs.plot_mat(self.z1_val, t=self.t)
+        if self.plot:
+            g = graphs.OptGraphs(self, self.x_by_sample)
+            g.tanks_volume()
+            g.soc(soc_to_plot=soc)
 
         wc_cost = self.problem.value
-        avg_cost = costs.sum(axis=(1, 2)).mean()
+        avg_cost, max_cost = costs.sum(axis=(1, 2)).mean(), costs.sum(axis=(1, 2)).max()
         reliability = violations['total'].sum() / n
-        return wc_cost, avg_cost, reliability
+        return wc_cost, avg_cost, max_cost, reliability
 
     def calculate_piecewise_linear_result(self, x_values):
         # Ensure input is a numpy array for vectorized operations
