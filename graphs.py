@@ -4,8 +4,15 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import ticker as mtick
+from matplotlib.ticker import ScalarFormatter, FormatStrFormatter
+from matplotlib.lines import Line2D
+
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
 
 COLORS = {"ARO": "#005d8f", "RED": "#d62828", "RO-MAX": "#f77f00", "RO-AVG": "#fcbf49"}
+COLORS = {"ARO-AVG": "#1151b0", "ARO-MAX": "#1e5bba", "RED": "#d62828", "RO-MAX": "#e42727", "RO-AVG": "#f69c46"}
 
 
 class OptGraphs:
@@ -15,11 +22,12 @@ class OptGraphs:
         self.wds = model.wds
 
         self.x = x
+        self.alpha = 0.3
 
     def tanks_volume(self):
         ncols = max(1, int(math.ceil(math.sqrt(self.wds.n_tanks))))
         nrows = max(1, int(math.ceil(self.wds.n_tanks / ncols)))
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False)
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False, figsize=(8, 4))
         axes = np.atleast_2d(axes).ravel()
 
         for tank_idx, (tank_name, tank_data) in enumerate(self.wds.tanks.iterrows()):
@@ -29,16 +37,17 @@ class OptGraphs:
             else:
                 init_vol = tank_data['init_vol'] * self.wds.flows_factor
 
-            axes[tank_idx].plot(np.hstack([init_vol, tank_data['init_vol'] * self.wds.flows_factor + inflow.cumsum(axis=-1)]).T, 'C0')
-            axes[tank_idx].scatter(0, tank_data['init_vol'] * self.wds.flows_factor, facecolor="none", edgecolor='r')
+            y = np.hstack([init_vol, tank_data['init_vol'] * self.wds.flows_factor + inflow.cumsum(axis=-1)]).T
+            axes[tank_idx].plot(y, 'C0', alpha=self.alpha)
+            # axes[tank_idx].scatter(0, tank_data['init_vol'] * self.wds.flows_factor, facecolor="none", edgecolor='r')
             axes[tank_idx].grid()
             axes[tank_idx].hlines(tank_data['min_vol'] * self.wds.flows_factor, 0, self.model.t, 'r')
             axes[tank_idx].hlines(tank_data['max_vol'] * self.wds.flows_factor, 0, self.model.t, 'r')
             axes[tank_idx].hlines(tank_data['init_vol'] * self.wds.flows_factor, 0, self.model.t, 'k', linestyle='--')
 
         fig.text(0.5, 0.04, 'Time (hr)', ha='center')
-        fig.text(0.04, 0.5, f'Volume ($m^3$)', va='center',
-                 rotation='vertical')
+        fig.text(0.02, 0.5, f'Volume ($m^3$)', va='center', rotation='vertical')
+        fig.subplots_adjust(bottom=0.15, top=0.95, right=0.92, wspace=0.25)
 
     def soc(self, soc_to_plot=None):
         ncols = max(1, int(math.ceil(math.sqrt(self.pds.n_batteries))))
@@ -48,25 +57,14 @@ class OptGraphs:
         axes = np.atleast_2d(axes).ravel()
 
         for bat_idx, (bat_name, bat_data) in enumerate(self.pds.batteries.iterrows()):
-            bat_c = self.x[:, self.pds.n_bus + self.pds.n_generators + bat_idx]
-            bat_d = self.x[:, self.pds.n_bus + self.pds.n_generators + self.pds.n_batteries + bat_idx]
-
-            # init_soc = np.tile(bat_data['init_storage'], bat_c.shape[0]).reshape(-1, 1)
-            # soc1 = np.hstack([init_soc, bat_data['init_storage']
-            #                  + bat_c.cumsum(axis=-1) * self.pds.pu_to_mw
-            #                 - bat_d.cumsum(axis=-1) * self.pds.pu_to_mw]
-            #                 )
-
             x_bat_in = (self.x[:, self.pds.n_bus + self.pds.n_generators + bat_idx]
                         - self.x[:, self.pds.n_bus + self.pds.n_generators + self.pds.n_batteries + bat_idx])
             x_bat_in *= self.pds.pu_to_mw
 
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
             soc = np.hstack([init_soc, (bat_data['init_storage'] + np.tril(np.ones((self.model.t, self.model.t))) @ x_bat_in.T).T])
-
-            # axes[bat_idx].plot(soc.T, 'C0', zorder=10)
             if soc_to_plot is not None:
-                axes[bat_idx].plot(soc_to_plot.T, 'C0')
+                axes[bat_idx].plot(soc_to_plot.T, 'C0', alpha=self.alpha)
 
             axes[bat_idx].hlines(y=bat_data['min_storage'], xmin=0, xmax=self.model.t, color='r')
             axes[bat_idx].hlines(y=bat_data['max_storage'], xmin=0, xmax=self.model.t, color='r')
@@ -74,26 +72,33 @@ class OptGraphs:
             axes[bat_idx].grid()
 
     def plot_generators(self, shared_y=False):
-        ncols = max(1, math.ceil(math.sqrt(self.pds.n_generators)) + 1)
+        ncols = max(1, math.ceil(math.sqrt(self.pds.n_generators)))
         nrows = max(1, int(math.ceil(self.pds.n_generators / ncols)))
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y)
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y, figsize=(8, 4))
         axes = np.atleast_2d(axes).ravel()
         for i, (gen_idx, gen_data) in enumerate(self.pds.generators.iterrows()):
             p = self.x[:, self.model.n_bus + i] * self.pds.pu_to_mw
-            axes[i].plot(p.T, 'C0')
+            axes[i].plot(p.T, 'C0', alpha=self.alpha)
             axes[i].grid()
+            axes[i].yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            # axes[i].yaxis.set_major_formatter(ScalarFormatter(useOffset=False, useMathText=False))
+            if np.ptp(p.T) < 0.001:
+                m = p.T.mean()
+                custom_ticks = np.arange(m - 5, m + 6, 1)
+                axes[i].set_yticks(custom_ticks)
+
         fig.text(0.5, 0.04, 'Time (hr)', ha='center')
-        fig.text(0.04, 0.5, f'Generation ({self.pds.input_power_units.upper()})', va='center',
+        fig.text(0.02, 0.5, f'Generation ({self.pds.input_power_units.upper()})', va='center',
                  rotation='vertical')
 
-        fig.subplots_adjust(hspace=0.15)
+        fig.subplots_adjust(bottom=0.15, top=0.95, right=0.92, wspace=0.25)
 
 
 def plot_mat(mat, norm=False, t=24):
     WhtBlRd = ["#ffffff", "#8ecae6", "#046B9F", "#fdf4b0", "#ffbf1f", "#b33005"]
     cmap = get_continuous_cmap(WhtBlRd)
 
-    plt.figure()
+    fig = plt.figure()
     if norm:
         mat = (mat - mat.min()) / (mat.max() - mat.min())
 
@@ -116,7 +121,7 @@ def plot_mat(mat, norm=False, t=24):
 
     ax.set_xticks(np.arange(-0.5, mat.shape[0], 1), minor=True)
     ax.set_yticks(np.arange(-0.5, mat.shape[0], 1), minor=True)
-    plt.subplots_adjust(top=0.9, bottom=0.13, left=0.055, right=0.9, hspace=0.2, wspace=0.2)
+    fig.subplots_adjust(top=0.9, bottom=0.13, left=0.055, right=0.9, hspace=0.2, wspace=0.2)
     return ax
 
 
@@ -172,7 +177,6 @@ def por(ro_results="", aro_results=""):
     if ro_results:
         ro = pd.read_csv(ro_results)
         ax.plot(ro['avg_cost'], ro['reliability'], label='RO-AVG', marker='o', mfc="w", c=COLORS["RO-AVG"])
-        # ax.plot(ro['max_cost'], ro['reliability'], label='RO', c='navy', marker='o', mfc="w")
     if aro_results:
         aro = pd.read_csv(aro_results, index_col=0)
         if 'pds_lat' in aro.columns or 'wds_lat' in aro.columns:
@@ -180,23 +184,28 @@ def por(ro_results="", aro_results=""):
             latency_results = aro[['theta', 'avg_cost', 'pds_lat', 'wds_lat', 'reliability']]
             latency_results = latency_results.loc[(latency_results['pds_lat'] > 0) & (latency_results['wds_lat'] > 0)]
 
-        ax.plot(aro['avg_cost'], aro['reliability'], label='ARO-AVG', marker='o', mfc="w", c=COLORS["ARO"])
-        # ax.scatter(latency_results['avg_cost'], latency_results['reliability'], c='lightgrey', alpha=0.6)
+        ax.plot(aro['avg_cost'], aro['reliability'], label='ARO-AVG', marker='o', mfc="w", c=COLORS["ARO-AVG"])
 
+    ax.grid()
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
     ax.set_xlabel("Cost ($)")
-    ax.set_ylabel("Reliability (%)")
+    ax.set_ylabel("CSR (%)")
     ax.legend(loc="lower right")
 
 
 def analyze_latency(aro_path, ro_path):
     from scipy.interpolate import griddata
     df = pd.read_csv(aro_path, index_col=0)
+    df = df.loc[df['theta'] != 0]
+
+    # just for review the results
+    df['penalty_deviation'] = df['penalized_avg_obj'] / df['avg_cost']
+    df['penalty_cost'] = df['penalized_avg_obj'] - df['avg_cost']
 
     fig, ax = plt.subplots()
     ax.plot(df.loc[(df['pds_lat'] == 0) & (df['wds_lat'] == 0), "avg_cost"],
             df.loc[(df['pds_lat'] == 0) & (df['wds_lat'] == 0), "reliability"],
-                    marker='o', mfc="w", c=COLORS["ARO"], label="ARO No Latency")
+                    marker='o', mfc="w", c=COLORS["ARO-AVG"], label="ARO No Latency")
 
     ax.plot(df.loc[(df['pds_lat'] == 6) & (df['wds_lat'] == 0), "avg_cost"],
             df.loc[(df['pds_lat'] == 6) & (df['wds_lat'] == 0), "reliability"],
@@ -214,20 +223,54 @@ def analyze_latency(aro_path, ro_path):
             df.loc[(df['pds_lat'] == 0) & (df['wds_lat'] == 12), "reliability"],
             marker='o', mfc="w", label="PDS Latency=0 | WDS Latency=12")
 
-    ro = pd.read_csv(ro_path, index_col=0)
-    ax.plot(ro["avg_cost"], ro["reliability"], marker='o', mfc="w", c=COLORS["RO-AVG"], label="RO-AVG")
     ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
     ax.set_xlabel("Cost ($)")
     ax.set_ylabel("Reliability (%)")
     ax.legend(loc="lower right")
 
-    fig, axes = plt.subplots(ncols=2, subplot_kw=dict(projection='3d'))
-    df = df.loc[df['theta'] == 1]
+    num_categories = len(np.unique(df['pds_lat']))
+    cmap = plt.get_cmap('RdBu_r', num_categories)  # using a colormap with discrete colors
+    fig, axes = plt.subplots(ncols=2)
+    axes[0].scatter(df['avg_cost'], df["reliability"], c=df['wds_lat'], cmap=cmap, edgecolor='k', alpha=0.8)
+    axes[1].scatter(df['avg_cost'], df["reliability"], c=df['pds_lat'], cmap=cmap, edgecolor='k', alpha=0.8)
 
-    x = df['pds_lat'].values
-    y = df['wds_lat'].values
-    obj = df['avg_cost'].values
-    reliability = df['reliability'].values
+    fig, axes = plt.subplots(ncols=3, subplot_kw=dict(projection='3d'))
+    for i, _ in enumerate([1, 2, 3]):
+        temp = df.loc[df['theta'] == _]
+        x = temp['pds_lat'].values
+        y = temp['wds_lat'].values
+        obj = temp['penalized_avg_obj'].values
+        reliability = temp['reliability'].values
+
+        grid_x, grid_y = np.mgrid[0:x.max():25j, 0:y.max():25j]
+        points = np.array([x, y]).T
+        grid = griddata(points, np.array(obj), (grid_x, grid_y), method='linear')
+
+        mappable = plt.cm.ScalarMappable(cmap=plt.cm.cividis)
+        mappable.set_array(grid)
+        mappable.set_clim(obj.min(), obj.max())
+
+        axes[i].plot_surface(grid_x, grid_y, grid, rstride=1, cstride=1, edgecolor='k', lw=0.5, cmap=plt.cm.RdBu_r, alpha=0.8)
+
+        axes[i].zaxis.set_rotate_label(False)  # disable automatic rotation
+        axes[i].set_zlabel('Constraint Penalized Cost ($)', rotation=90)
+        axes[i].set_xlabel('PDS Latency (hr)')
+        axes[i].set_ylabel('WDS latency (hr)')
+        axes[i].zaxis.labelpad = 10
+        axes[i].tick_params(axis='z', pad=8)
+        axes[i].set_title(f'$\Omega$={_}', y=0.95)
+
+        axes[i].azim = -130
+        axes[i].elev = 15
+    fig.subplots_adjust(left=0.08, right=0.95, wspace=0.2)
+
+    ############################################################
+    fig, axes = plt.subplots(ncols=2, subplot_kw=dict(projection='3d'))
+    temp = df.loc[df['theta'] == 1]
+    x = temp['pds_lat'].values
+    y = temp['wds_lat'].values
+    obj = temp['avg_cost'].values
+    reliability = temp['reliability'].values
 
     grid_x, grid_y = np.mgrid[0:x.max():25j, 0:y.max():25j]
     points = np.array([x, y]).T
@@ -236,33 +279,28 @@ def analyze_latency(aro_path, ro_path):
     mappable = plt.cm.ScalarMappable(cmap=plt.cm.cividis)
     mappable.set_array(grid)
     mappable.set_clim(obj.min(), obj.max())
-
-    l = axes[0].plot_surface(grid_x, grid_y, grid, rstride=1, cstride=1, edgecolor='k', lw=0.5, cmap=plt.cm.RdBu_r, alpha=0.8)
+    axes[0].plot_surface(grid_x, grid_y, grid, rstride=1, cstride=1, edgecolor='k', lw=0.5,cmap=plt.cm.RdBu_r, alpha=0.8)
 
     grid = griddata(points, np.array(reliability), (grid_x, grid_y), method='linear')
     mappable = plt.cm.ScalarMappable(cmap=plt.cm.cividis)
     mappable.set_array(grid)
     mappable.set_clim(reliability.min(), reliability.max())
-    l = axes[1].plot_surface(grid_x, grid_y, grid, rstride=1, cstride=1, edgecolor='k', lw=0.5, cmap=plt.cm.RdBu_r, alpha=0.8)
+    axes[1].plot_surface(grid_x, grid_y, grid, rstride=1, cstride=1, edgecolor='k', lw=0.5, cmap=plt.cm.RdBu_r, alpha=0.8)
 
-    axes[0].zaxis.set_rotate_label(False)  # disable automatic rotation
+    for ax in axes:
+        ax.zaxis.set_rotate_label(False)  # disable automatic rotation
+        ax.set_xlabel('PDS Latency (hr)')
+        ax.set_ylabel('WDS latency (hr)')
+        ax.tick_params(axis='z', pad=8)
+        ax.azim = -130
+        ax.elev = 15
+
     axes[0].set_zlabel('Cost ($)', rotation=90)
-    axes[0].set_xlabel('PDS Latency (hr)')
-    axes[0].set_ylabel('WDS latency (hr)')
+    axes[1].set_zlabel('Reliability ($)', rotation=90)
+    axes[0].zaxis.labelpad = 10
 
-    axes[1].zaxis.set_rotate_label(False)  # disable automatic rotation
-    axes[1].set_zlabel('Reliability (%)', rotation=90)
-    axes[1].set_xlabel('PDS Latency (hr)')
-    axes[1].set_ylabel('WDS latency (hr)')
-
-    axes[0].azim = -130
-    axes[0].elev = 25
-    axes[1].azim = 45
-    axes[1].elev = 25
-    plt.subplots_adjust(left=0.08, right=0.95, wspace=0.2)
 
 
 if __name__ == "__main__":
     analyze_latency(aro_path="output/6_3-bus_aro_por.csv", ro_path="output/6_3-bus_ro_por.csv")
     plt.show()
-
