@@ -12,7 +12,7 @@ Create new venv by running the command:</br>
 Activate the venv by:</br>
 `source venv/bin/activate` (for mac) or `venv\Scripts\activate.bat` (for windows)</br>
 
-Once the virtual environment is setup and activated,</br>
+Once the virtual environment is set up and activated,</br>
 Install the dependencies by running the following command:
 `pip install -r requirements.txt`</br>
 
