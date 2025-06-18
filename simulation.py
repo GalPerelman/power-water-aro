@@ -59,6 +59,7 @@ class Simulation(opt.RobustModel):
 
         self.x_nominal, self.x_by_sample = self.extract_x()
         self.graphs = graphs.OptGraphs(self, self.x_by_sample)
+        self.solution = {"tanks": {}, "batteries": {}}
         self.violations = pd.DataFrame()
         self.violations_penalty = {}
 
@@ -143,6 +144,8 @@ class Simulation(opt.RobustModel):
             else:
                 vol = vol - cumm_demand
 
+            self.solution["tanks"][tank_name] = vol
+
             x_tank_in = self.x_nominal[:, self.n_pds + self.n_combs + self.n_desal + tank_idx, :]
             vol_by_tank_vars = (init_vol + np.tril(np.ones((self.t, self.t))) @ x_tank_in.T).T
 
@@ -219,6 +222,8 @@ class Simulation(opt.RobustModel):
 
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
             soc = np.hstack([init_soc, (bat_data['init_storage'] + np.tril(np.ones((self.t, self.t))) @ x_bat_in.T).T])
+            self.solution["batteries"][bat_name] = soc
+
             bat_ub = np.tile(bat_data['max_storage'], self.t + 1)
             bat_lb = np.tile(bat_data['min_storage'], self.t + 1)
             bat_lb[-1] = bat_data['init_storage']
