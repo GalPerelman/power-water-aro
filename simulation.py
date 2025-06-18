@@ -439,6 +439,38 @@ def plot_advanced_por(experiment_path):
     fig2.subplots_adjust(left=0.13, right=0.97, top=0.96, bottom=0.12, hspace=0.06)
 
 
+def plot_ro_vs_aro(ro_path, aro_path, thetas):
+    batteries_fig, batteries_ax = plt.subplots()
+
+    for i, theta in enumerate(thetas):
+        ro = read_solution(sol_path=f"{ro_path}_{theta}.pkl")
+        sim = Simulation(**ro, plot=False)
+        costs, violations_rate = sim.run()
+        tanks_fig = sim.graphs.tanks_volume(color="C1", leg_label="RO")
+        generators_fig = sim.graphs.plot_generators(shared_y=False, color="C1", leg_label="RO", zo=5)
+        for bat_idx, (bat_name, bat_data) in enumerate(sim.pds.batteries.iterrows()):
+            batteries_ax.plot(sim.solution["batteries"][bat_name].T, 'C1', alpha=0.3, zorder=2)
+            batteries_ax.grid(True)
+            batteries_ax.plot(sim.solution["batteries"][bat_name].T[:, 0], 'C1', label="RO")
+
+        aro = read_solution(sol_path=f"{aro_path}_{theta}.pkl")
+        sim = Simulation(**aro, plot=False)
+        costs, violations_rate = sim.run()
+        tanks_fig = sim.graphs.tanks_volume(fig=tanks_fig, color='C0', leg_label="ARO")
+        generators_fig = sim.graphs.plot_generators(shared_y=False, fig=generators_fig, color="C0", leg_label="ARO",
+                                                    zo=1)
+        for bat_idx, (bat_name, bat_data) in enumerate(sim.pds.batteries.iterrows()):
+            batteries_ax.plot(sim.solution["batteries"][bat_name].T, 'C0', alpha=0.3, zorder=5)
+            batteries_ax.hlines(bat_data['min_storage'], 0, sim.t, 'r', zorder=10)
+            batteries_ax.hlines(bat_data['max_storage'], 0, sim.t, 'r', zorder=10)
+            batteries_ax.hlines(bat_data['init_storage'], 0, sim.t, 'k', linestyle='--', zorder=10)
+            batteries_ax.grid(True)
+            batteries_ax.plot(sim.solution["batteries"][bat_name].T[:, 0], 'C0', label="ARO")
+
+        batteries_ax.legend(framealpha=1)
+        batteries_ax.set_xlabel('Time (hr)')
+        batteries_ax.set_ylabel(f'SOC ({sim.pds.input_power_units.upper()}h)')
+
 
 if __name__ == "__main__":
     thetas = [0.5, 1, 1.5, 2, 2.5, 3]
