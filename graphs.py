@@ -4,7 +4,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import ticker as mtick
-from matplotlib.ticker import ScalarFormatter, FormatStrFormatter
+from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, AutoLocator, Locator
 from matplotlib.lines import Line2D
 
 pd.set_option('display.max_rows', 500)
@@ -80,18 +80,60 @@ class OptGraphs:
             p = self.x[:, self.model.n_bus + i] * self.pds.pu_to_mw
             axes[i].plot(p.T, 'C0', alpha=self.alpha)
             axes[i].grid()
-            axes[i].yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            axes[i].plot(p.T, color, alpha=self.alpha, zorder=zo)
+            # axes[i].yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
             # axes[i].yaxis.set_major_formatter(ScalarFormatter(useOffset=False, useMathText=False))
-            if np.ptp(p.T) < 0.001:
-                m = p.T.mean()
-                custom_ticks = np.arange(m - 5, m + 6, 1)
-                axes[i].set_yticks(custom_ticks)
+            # axes[i].yaxis.set_major_locator(ConstantAwareLocator(tol=1e-10, fixed_interval=1, fixed_range=20))
+            axes[i].yaxis.set_major_locator(ConstantAwareLocator(tol=0.1, width=3, step=1))
+            axes[i].yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
 
         fig.text(0.5, 0.04, 'Time (hr)', ha='center')
         fig.text(0.02, 0.5, f'Generation ({self.pds.input_power_units.upper()})', va='center',
                  rotation='vertical')
 
         fig.subplots_adjust(bottom=0.15, top=0.95, right=0.92, wspace=0.25)
+
+
+class ConstantAwareLocator(Locator):
+    """
+    • If current span < tol  →  enlarge limits to [m-width, m+width]
+      and return ticks every *step* in that band.
+    • Else                  →  delegate to *fallback* (default AutoLocator).
+    """
+    def __init__(self, tol=1.0, width=5, step=1, fallback=None):
+        super().__init__()
+        self.tol = tol
+        self.width = width
+        self.step = step
+        self.fallback = fallback or AutoLocator()
+        self._fixed_limits = None        # remember whether we have expanded
+
+    def set_axis(self, axis):
+        super().set_axis(axis)
+        if hasattr(self.fallback, "set_axis"):
+            self.fallback.set_axis(axis)
+
+    def __call__(self):
+        if self.axis is None:
+            return self.fallback()
+
+        vmin, vmax = self.axis.get_view_interval()
+        if abs(vmax - vmin) < self.tol:
+            mid = 0.5 * (vmin + vmax)
+            lo = np.floor((mid - self.width) / self.step) * self.step
+            hi = np.ceil((mid + self.width) / self.step) * self.step
+
+            if self._fixed_limits != (lo, hi):
+                self.axis.axes.set_ylim(lo, hi)
+                self._fixed_limits = (lo, hi)
+
+            return np.arange(lo, hi + self.step, self.step)
+
+        self._fixed_limits = None
+        return self.fallback()
+
+    def tick_values(self, vmin, vmax):
+        return self.__call__()
 
 
 def plot_mat(mat, norm=False, t=24):
