@@ -24,11 +24,15 @@ class OptGraphs:
         self.x = x
         self.alpha = 0.3
 
-    def tanks_volume(self):
+    def tanks_volume(self, fig=None, color='C0', leg_label=""):
         ncols = max(1, int(math.ceil(math.sqrt(self.wds.n_tanks))))
         nrows = max(1, int(math.ceil(self.wds.n_tanks / ncols)))
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False, figsize=(8, 4))
-        axes = np.atleast_2d(axes).ravel()
+
+        if fig is None:
+            fig, axes = plt.subplots(nrows=1, ncols=self.wds.n_tanks, sharex=True, sharey=False, figsize=(9, 4.5))
+            axes = np.atleast_2d(axes).ravel()
+        else:
+            axes = fig.axes
 
         for tank_idx, (tank_name, tank_data) in enumerate(self.wds.tanks.iterrows()):
             inflow = self.x[:, self.model.n_pds + self.wds.n_combs + self.wds.n_desal + tank_idx] * self.wds.flows_factor
@@ -38,23 +42,30 @@ class OptGraphs:
                 init_vol = tank_data['init_vol'] * self.wds.flows_factor
 
             y = np.hstack([init_vol, tank_data['init_vol'] * self.wds.flows_factor + inflow.cumsum(axis=-1)]).T
-            axes[tank_idx].plot(y, 'C0', alpha=self.alpha)
+            axes[tank_idx].plot(y, color, alpha=self.alpha)
             # axes[tank_idx].scatter(0, tank_data['init_vol'] * self.wds.flows_factor, facecolor="none", edgecolor='r')
-            axes[tank_idx].grid()
+            axes[tank_idx].grid(True)
             axes[tank_idx].hlines(tank_data['min_vol'] * self.wds.flows_factor, 0, self.model.t, 'r')
             axes[tank_idx].hlines(tank_data['max_vol'] * self.wds.flows_factor, 0, self.model.t, 'r')
             axes[tank_idx].hlines(tank_data['init_vol'] * self.wds.flows_factor, 0, self.model.t, 'k', linestyle='--')
+            if leg_label:
+                axes[tank_idx].plot(y[:, 0], color, label=leg_label)
+                axes[tank_idx].legend(framealpha=1)
 
         fig.text(0.5, 0.04, 'Time (hr)', ha='center')
-        fig.text(0.02, 0.5, f'Volume ($m^3$)', va='center', rotation='vertical')
-        fig.subplots_adjust(bottom=0.15, top=0.95, right=0.92, wspace=0.25)
+        fig.text(0.02, 0.55, f'Volume ($m^3$)', va='center', rotation='vertical')
+        fig.subplots_adjust(left=0.105, bottom=0.15, top=0.95, right=0.92, wspace=0.2)
+        return fig
 
-    def soc(self, soc_to_plot=None):
+    def soc(self, soc_to_plot=None, fig=None, color="c0"):
         ncols = max(1, int(math.ceil(math.sqrt(self.pds.n_batteries))))
         nrows = max(1, int(math.ceil(self.pds.n_batteries / ncols)))
 
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False)
-        axes = np.atleast_2d(axes).ravel()
+        if fig is None:
+            fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False)
+            axes = np.atleast_2d(axes).ravel()
+        else:
+            axes = fig.axes
 
         for bat_idx, (bat_name, bat_data) in enumerate(self.pds.batteries.iterrows()):
             x_bat_in = (self.x[:, self.pds.n_bus + self.pds.n_generators + bat_idx]
@@ -64,34 +75,43 @@ class OptGraphs:
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
             soc = np.hstack([init_soc, (bat_data['init_storage'] + np.tril(np.ones((self.model.t, self.model.t))) @ x_bat_in.T).T])
             if soc_to_plot is not None:
-                axes[bat_idx].plot(soc_to_plot.T, 'C0', alpha=self.alpha)
+                axes[bat_idx].plot(soc_to_plot.T, color, alpha=self.alpha)
 
             axes[bat_idx].hlines(y=bat_data['min_storage'], xmin=0, xmax=self.model.t, color='r')
             axes[bat_idx].hlines(y=bat_data['max_storage'], xmin=0, xmax=self.model.t, color='r')
             axes[bat_idx].hlines(y=bat_data['init_storage'], xmin=0, xmax=self.model.t, color='k', linestyle='--')
             axes[bat_idx].grid()
+        return fig
 
-    def plot_generators(self, shared_y=False):
-        ncols = max(1, math.ceil(math.sqrt(self.pds.n_generators)))
-        nrows = max(1, int(math.ceil(self.pds.n_generators / ncols)))
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y, figsize=(8, 4))
-        axes = np.atleast_2d(axes).ravel()
+    def plot_generators(self, shared_y=False, fig=None, color="C0", leg_label="", zo=1):
+        if fig is None:
+            ncols = max(1, math.ceil(math.sqrt(self.pds.n_generators)))
+            nrows = max(1, int(math.ceil(self.pds.n_generators / ncols)))
+            fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y, figsize=(9, 4.5))
+            axes = np.atleast_2d(axes).ravel()
+        else:
+            axes = fig.axes
+
         for i, (gen_idx, gen_data) in enumerate(self.pds.generators.iterrows()):
             p = self.x[:, self.model.n_bus + i] * self.pds.pu_to_mw
-            axes[i].plot(p.T, 'C0', alpha=self.alpha)
-            axes[i].grid()
             axes[i].plot(p.T, color, alpha=self.alpha, zorder=zo)
+            axes[i].set_axisbelow(True)
+            axes[i].grid(True, zorder=0)
             # axes[i].yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
             # axes[i].yaxis.set_major_formatter(ScalarFormatter(useOffset=False, useMathText=False))
             # axes[i].yaxis.set_major_locator(ConstantAwareLocator(tol=1e-10, fixed_interval=1, fixed_range=20))
             axes[i].yaxis.set_major_locator(ConstantAwareLocator(tol=0.1, width=3, step=1))
             axes[i].yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+            if leg_label:
+                axes[i].plot(p.T[:, 0], color, label=leg_label)
+                axes[i].legend(framealpha=1)
 
         fig.text(0.5, 0.04, 'Time (hr)', ha='center')
-        fig.text(0.02, 0.5, f'Generation ({self.pds.input_power_units.upper()})', va='center',
+        fig.text(0.02, 0.55, f'Generation ({self.pds.input_power_units.upper()})', va='center',
                  rotation='vertical')
 
-        fig.subplots_adjust(bottom=0.15, top=0.95, right=0.92, wspace=0.25)
+        fig.subplots_adjust(left=0.1, bottom=0.15, top=0.95, right=0.92, wspace=0.2)
+        return fig
 
 
 class ConstantAwareLocator(Locator):
