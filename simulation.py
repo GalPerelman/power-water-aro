@@ -494,8 +494,10 @@ if __name__ == "__main__":
     graphs.analyze_latency(aro_path="output/I_3-bus-desalination-wds_aro_por.csv",
                            ro_path="output/I_3-bus-desalination-wds_ro_por.csv")
 
-    # plot system behaviour for supplementary materials
-    simulate_experiment("output/I_3-bus-desalination-wds_aro", thetas=[1], export=False, plot=True)
-    simulate_experiment("output/I_sa_dep_bat_aro", thetas=[1], export=False, plot=True)
+    # plot decision space
+    plot_ro_vs_aro("output/I_3-bus-desalination-wds_ro", aro_path="output/I_3-bus-desalination-wds_aro",
+                   thetas=[1])
+    plot_ro_vs_aro("output/I_sa_dep_bat_ro", aro_path="output/I_sa_dep_bat_aro",
+                   thetas=[1])
 
     plt.show()
