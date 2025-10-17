@@ -57,7 +57,7 @@ class OptGraphs:
         fig.subplots_adjust(left=0.105, bottom=0.15, top=0.95, right=0.92, wspace=0.2)
         return fig
 
-    def soc(self, soc_to_plot=None, fig=None, color="c0"):
+    def soc(self, soc_to_plot=None, fig=None, color="C0"):
         ncols = max(1, int(math.ceil(math.sqrt(self.pds.n_batteries))))
         nrows = max(1, int(math.ceil(self.pds.n_batteries / ncols)))
 
@@ -255,7 +255,7 @@ def por(ro_results="", aro_results=""):
     ax.legend(loc="lower right")
 
 
-def analyze_latency(aro_path, ro_path):
+def analyze_latency(aro_path):
     from scipy.interpolate import griddata
     df = pd.read_csv(aro_path, index_col=0)
     df = df.loc[df['theta'] != 0]
