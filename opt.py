@@ -485,10 +485,11 @@ class StandardDCPF(BaseOptModel):
     Based on standard equality constraints
     """
 
-    def __init__(self, pds_path, wds_path, t, omega=None, opt_method=None, elimination_method=None, pw_segments=None,
-                 n_bat_vars=2, solver_params=None, solver_display=False):
-        super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, pw_segments, n_bat_vars,
-                         solver_params, solver_display)
+    def __init__(self, pds_path, wds_path, t, omega=None, opt_method=None, elimination_method=None,
+                 manual_indep_variables=None, pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False,
+                 **kwargs):
+        super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
+                         pw_segments, n_bat_vars, solver_params, solver_display, **kwargs)
 
         self.lb, self.ub = self.get_x_bounds()
         self.x = self.declare_variables()
@@ -508,6 +509,9 @@ class StandardDCPF(BaseOptModel):
         self.problem = cp.Problem(cp.Minimize(self.piecewise_costs @ self.x), self.constraints)
         self.problem.solve(solver=cp.GUROBI, reoptimize=True)
         obj, status, solver_time = self.problem.value, self.problem.status, self.problem.solver_stats.solve_time
+
+        run_time = self.problem.solver_stats.solve_time
+        print(f"Objective (WC): {self.problem.value} | Solver time: {run_time}")
         return obj, status, solver_time
 
 
