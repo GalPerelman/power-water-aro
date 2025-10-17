@@ -520,13 +520,22 @@ class RobustModel(BaseOptModel):
     Robust and Adjustable Robust Optimization
     """
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables=None,
-                 pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False, pds_lat=0, wds_lat=0,
+                 pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False,
+                 pds_lat=0, wds_lat=0, pds_lags=None, wds_lags=None,
                  plot=False, **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display, **kwargs)
 
         self.pds_lat = pds_lat
         self.wds_lat = wds_lat
+        self.pds_lags = pds_lags
+        self.wds_lags = wds_lags
+        if self.pds_lags is None:
+            self.pds_lags = self.t
+
+        if self.wds_lags is None:
+            self.wds_lags = self.t
+
         self.plot = plot
 
         # matrices for time based formulation
@@ -724,14 +733,15 @@ class RobustModel(BaseOptModel):
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         self.t_formulation_start = time.time()
 
-        n_lags = self.t
         n_indep_no_pw = self.n_indep_per_t - self.n_gen
         certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
         n_uncertain_bus_per_t = self.n_bus - len(certain_bus_per_t)
-        loads_block = self.get_ldr_block(n=n_indep_no_pw, k=n_uncertain_bus_per_t, T=self.t, lags=n_lags, lat=self.pds_lat)
-        dem_block = self.get_ldr_block(n=n_indep_no_pw, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.wds_lat)
-        pw_loads_block = self.get_ldr_block(n=self.n_gen, k=n_uncertain_bus_per_t, T=self.t, lags=n_lags, lat=self.pds_lat)
-        pw_dem_block = self.get_ldr_block(n=self.n_gen, k=self.n_tanks, T=self.t, lags=n_lags, lat=self.pds_lat)
+        loads_block = self.get_ldr_block(n=n_indep_no_pw, k=n_uncertain_bus_per_t, T=self.t,
+                                         lags=self.pds_lags, lat=self.pds_lat)
+        dem_block = self.get_ldr_block(n=n_indep_no_pw, k=self.n_tanks, T=self.t, lags=self.wds_lags, lat=self.wds_lat)
+        pw_loads_block = self.get_ldr_block(n=self.n_gen, k=n_uncertain_bus_per_t, T=self.t,
+                                            lags=self.pds_lags, lat=self.pds_lat)
+        pw_dem_block = self.get_ldr_block(n=self.n_gen, k=self.n_tanks, T=self.t, lags=self.wds_lags, lat=self.wds_lat)
         nonanticipative_mat = np.block([[loads_block, dem_block], [pw_loads_block, pw_dem_block]])
 
         # flip nonanticipative mat - constraint is on the elements not included
