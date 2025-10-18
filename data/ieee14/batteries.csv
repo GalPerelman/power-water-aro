@@ -1,2 +1,2 @@
 ﻿bus_id,min_storage,max_storage,max_charge,max_discharge,init_storage,final_storage,charge_eff,discharge_eff
-5,0,2000,250,250,500,500,0.95,0.95
+13,0,2000,250,250,500,500,0.95,0.95
