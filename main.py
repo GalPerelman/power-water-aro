@@ -1,3 +1,5 @@
+import time
+
 import pandas as pd
 import numpy as np
 import argparse
@@ -23,17 +25,19 @@ def run_experiment(cfg):
     df = pd.DataFrame()
     for _ in cfg['omegas']:
         model.omega = _
+        t_start = time.time()
         model.solve()
+        t_end = time.time()
         wc_cost, avg_cost, max_cost, csr = model.analyze_solution(n=1000)
         solution = {"pds_path": model.pds_path, "wds_path": model.wds_path,
                     "z0": model.z0_val, "z1": model.z1_val, "solver_obj": model.obj.value, "omega": _, "t": model.t,
                     "opt_method": model.opt_method, "pw_segments": 4, "elimination_method": model.elimination_method,
-                    "n_bat_vars": model.n_bat_vars, 'manual_indep_variables': model.manual_indep_variables}
-        if cfg['export']:
-            export_path = f"output/{cfg['name']}_{cfg['opt_method']}_{_}.pkl"
-            with open(export_path, 'wb') as handle:
-                pickle.dump(solution, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        results = pd.DataFrame({"wc": wc_cost, "avg": avg_cost, "max": max_cost, "r": csr}, index=[len(df)])
+                    "n_bat_vars": model.n_bat_vars, 'manual_indep_variables': model.manual_indep_variables,
+                    "pds_lags": model.pds_lags, "wds_lags": model.wds_lags}
+        stats = {**{"total_time": t_end - t_start}, **model.solution_metrics}
+        solution = {**solution, **stats}
+
+        results = pd.DataFrame({"wc": wc_cost, "avg": avg_cost, "max": max_cost, "r": csr, **stats}, index=[len(df)])
         df = pd.concat([df, results])
         print(df)
 

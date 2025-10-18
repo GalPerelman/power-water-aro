@@ -71,6 +71,7 @@ class BaseOptModel:
         self.problem = None
         self.omega_param = None
         self.constraints = []
+        self.solution_metrics = {}
 
         # time decomposition for ro and aro
         self.t_cols, self.t_eq_rows = self.get_entries_by_t()
@@ -959,6 +960,140 @@ class RobustModel(BaseOptModel):
         else:
             self.z1_val = self.z1.value
         self.extract_solution()
+        self.record_solution_metrics()
+
+    def record_solution_metrics(self):
+        self.solution_metrics['solver_name'] = self.problem.solver_stats.solver_name
+        self.solution_metrics['status'] = self.problem.status
+        self.solution_metrics['solver_time'] = self.problem.solver_stats.solve_time  # Time reported by the solver
+
+        # The number of seconds it took to compile the problem the last time it was compiled
+        self.solution_metrics['compilation_time'] = self.problem.compilation_time
+
+        # The time (in seconds) it took for the solver to setup the problem.
+        # self.solution_metrics['setup_time'] = self.problem.solver_stats.setup_time
+        # self.solution_metrics['num_iterations'] = self.problem.solver_stats.num_iters
+
+        self.solution_metrics['num_variables'] = self.problem.size_metrics.num_scalar_variables
+        self.solution_metrics['num_constraints'] = self.problem.size_metrics.num_scalar_eq_constr + self.problem.size_metrics.num_scalar_leq_constr
+
+        self.solution_metrics['high_level_variables'] = int(self.z0.size) + int(self.z1_sparsity_mask.sum()) + 1  # +1 for obj
+
+        constraint_types = {}
+        constraint_sizes = {}
+        constraint_details = []
+
+        for con in self.problem.constraints:
+            con_type = type(con).__name__
+
+            # Count constraint types
+            if con_type not in constraint_types:
+                constraint_types[con_type] = 0
+            constraint_types[con_type] += 1
+
+            # Track constraint sizes
+            if con_type not in constraint_sizes:
+                constraint_sizes[con_type] = []
+            constraint_sizes[con_type].append(con.size)
+
+            # Get more detailed information about each constraint
+            constraint_info = {
+                'type': con_type,
+                'size': con.size,
+                'expression': str(type(con.expr).__name__) if hasattr(con, 'expr') else None,
+            }
+
+            is_soc = False
+            if con_type in ['SOC', 'SecondOrderCone']:
+                is_soc = True
+            elif hasattr(con, 'expr'):
+                expr = con.expr
+                # Check if expression involves norms or SOC-related atoms
+                expr_str = str(type(expr).__name__)
+                if any(keyword in expr_str.lower() for keyword in ['norm', 'soc', 'quadover', 'pnorm']):
+                    is_soc = True
+                # Also check the actual string representation
+                expr_repr = str(expr)
+                if 'norm2' in expr_repr.lower() or 'norm(' in expr_repr.lower():
+                    is_soc = True
+                # Check the arguments recursively
+                if hasattr(expr, 'args'):
+                    for arg in expr.args:
+                        arg_type = str(type(arg).__name__)
+                        if any(keyword in arg_type.lower() for keyword in ['norm', 'soc', 'quadover', 'quad', 'pnorm']):
+                            is_soc = True
+                            break
+                        # Also check string representation of args
+                        if 'norm2' in str(arg).lower():
+                            is_soc = True
+                            break
+
+            constraint_info['is_soc'] = is_soc
+            constraint_details.append(constraint_info)
+
+        self.solution_metrics['constraints_by_type'] = constraint_types
+        # self.solution_metrics['constraint_sizes_by_type'] = {
+        #     k: {'count': len(v), 'total_size': sum(v), 'sizes': v}
+        #     for k, v in constraint_sizes.items()
+        # }
+        # self.solution_metrics['constraint_details'] = constraint_details
+
+        # Count SOC constraints specifically
+        soc_count = sum([c['size'] for c in constraint_details if c['is_soc']])
+        self.solution_metrics['num_soc_constraints'] = soc_count
+
+        # sparsity
+        solvers_to_try = [cp.GUROBI, cp.MOSEK, cp.SCS, cp.ECOS, cp.CLARABEL]
+        problem_data = None
+        solver_used = None
+
+        for solver in solvers_to_try:
+            try:
+                problem_data = self.problem.get_problem_data(solver)
+                solver_used = solver
+                break
+            except:
+                continue
+
+        if problem_data is None:
+            print("Warning: Could not compile problem with any available solver")
+            return
+
+        data = problem_data[0]
+
+        # Get constraint matrix - try multiple possible keys
+        constraint_matrix = None
+        matrix_keys = ['A', 'G', 'F', 'c']  # Different solvers use different keys
+
+        for key in matrix_keys:
+            if key in data and data[key] is not None:
+                mat = data[key]
+                if hasattr(mat, 'shape'):
+                    constraint_matrix = mat
+                    break
+
+        # Analyze sparsity of the main constraint matrix
+        if constraint_matrix is not None:
+            total_entries = constraint_matrix.shape[0] * constraint_matrix.shape[1]
+            nnz = None  # number of non-zeros
+            if hasattr(constraint_matrix, 'nnz'):
+                nnz = constraint_matrix.nnz
+            elif hasattr(constraint_matrix, 'count_nonzero'):
+                nnz = constraint_matrix.count_nonzero()
+            else:
+                try:
+                    nnz = np.count_nonzero(constraint_matrix)
+                except Exception as e:
+                    try:
+                        nnz = np.count_nonzero(constraint_matrix.toarray())
+                    except Exception as e2:
+                        pass
+
+            # these numbers are calculated based on the solver canonical form
+            self.solution_metrics['constraint_matrix_density'] = nnz / total_entries if total_entries > 0 else 0
+            self.solution_metrics['constraint_matrix_sparsity'] = 1 - (nnz / total_entries) if total_entries > 0 else 0
+
+        print(self.solution_metrics)
 
     def formulate_sparse_opt_problem(self):
         """
