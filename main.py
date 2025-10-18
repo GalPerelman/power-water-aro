@@ -1,3 +1,4 @@
+import os
 import time
 
 import pandas as pd
@@ -41,6 +42,13 @@ def run_experiment(cfg):
         df = pd.concat([df, results])
         print(df)
 
+        if cfg['export'] is not None:
+            file_name = f"{cfg['name']}_{cfg['opt_method']}_{_}.pkl"
+            export_path = os.path.join(cfg['export'], file_name)
+            with open(export_path, 'wb') as handle:
+                pickle.dump(solution, handle, protocol=pickle.HIGHEST_PROTOCOL)
+                df.to_csv(os.path.join(cfg['export'], f"{cfg['name']}_{cfg['opt_method']}_summary.csv"))
+
 
 def analyze_data_latency(cfg, omega=1, pds_latencies=None, wds_latencies=None):
     pds_latencies = [0, 2, 4, 6, 8, 10, 12] if pds_latencies is None else pds_latencies
@@ -63,8 +71,9 @@ def analyze_data_latency(cfg, omega=1, pds_latencies=None, wds_latencies=None):
             df = pd.concat([df, pd.DataFrame({"wc": wc_cost, "avg": avg_cost, "max": max_cost, "r": csr,
                                               "pds_lat": pds_lat, "wds_lat": wds_lat}, index=[len(df)])])
             print(df)
-            if cfg['export']:
-                export_path = f"output/{cfg['name']}_{cfg['opt_method']}_{omega}_pdslat-{pds_lat}_wdslat-{wds_lat}.pkl"
+            if cfg['export'] is not None:
+                file_name = f"{cfg['name']}_{cfg['opt_method']}_{omega}_pdslat-{pds_lat}_wdslat-{wds_lat}.pkl"
+                export_path = os.path.join(cfg['export'], file_name)
                 with open(export_path, 'wb') as handle:
                     pickle.dump(solution, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
