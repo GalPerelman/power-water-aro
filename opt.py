@@ -39,6 +39,7 @@ class BaseOptModel:
         self.solver_display = solver_display
 
         self.EPSILON = 0.1
+        self.piecewise_coef_scale = 1000  # to improve numerical stability
 
         self.pds = PDS(self.pds_path)
         self.wds = WDS(self.wds_path)
@@ -277,7 +278,9 @@ class BaseOptModel:
         for i, (gen_idx, row) in enumerate(self.pds.generators.iterrows()):
             bp = utils.quad_to_piecewise(a=row['gen_a'], b=row['gen_b'], c=row['gen_c'], p_min=row['min_gen_p'],
                                          p_max=row['max_gen_p'], num_segments=self.pw_segments)
-            bp = [(_[0] * self.pds.to_pu, _[1]) for _ in bp]
+
+            # convert power to pu, and scale costs for numeric stability
+            bp = [(_[0] * self.pds.to_pu, _[1] / self.piecewise_coef_scale) for _ in bp]
 
             # y = a * x + b
             a = [((bp[_ - 1][1] - bp[_][1]) / (bp[_ - 1][0] - bp[_][0])) for _ in range(1, len(bp))]
@@ -942,7 +945,7 @@ class RobustModel(BaseOptModel):
             OutputFlag=0
                            )
         run_time = self.problem.solver_stats.solve_time
-        print(f"Objective (WC): {self.problem.value} | Formulation time: {formulation_time:.2f} "
+        print(f"Objective (WC): {self.problem.value * self.piecewise_coef_scale} | Formulation time: {formulation_time:.2f} "
               f"| Solver time: {run_time}")
 
         self.z0_val = self.z0.value
@@ -1354,7 +1357,7 @@ class RobustModel(BaseOptModel):
             g.tanks_volume()
             g.soc(soc_to_plot=soc)
 
-        wc_cost = self.problem.value
+        wc_cost = self.problem.value * self.piecewise_coef_scale
         avg_cost, max_cost = costs.sum(axis=(1, 2)).mean(), costs.sum(axis=(1, 2)).max()
         reliability = violations['total'].sum() / n
         return wc_cost, avg_cost, max_cost, reliability
