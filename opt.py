@@ -525,7 +525,7 @@ class RobustModel(BaseOptModel):
     """
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables=None,
                  pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False,
-                 pds_lat=0, wds_lat=0, pds_lags=None, wds_lags=None,
+                 pds_lat=0, wds_lat=0, pds_lags=None, wds_lags=None, reduced_bound_constraints=True,
                  plot=False, **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display, **kwargs)
@@ -540,6 +540,7 @@ class RobustModel(BaseOptModel):
         if self.wds_lags is None:
             self.wds_lags = self.t
 
+        self.reduced_bound_constraints = reduced_bound_constraints
         self.plot = plot
 
         # matrices for time based formulation
@@ -583,9 +584,15 @@ class RobustModel(BaseOptModel):
         self.B = np.vstack([_ for _ in self.ineq_mat.values()])
         self.c = np.hstack([_ for _ in self.ineq_rhs.values()])
 
-        self.lb, self.ub = self.get_x_bounds()
-        self.B = np.vstack([self.B, -np.eye(self.B.shape[1]), np.eye(self.B.shape[1])])
-        self.c = np.hstack([self.c, -self.lb, self.ub])
+        if self.reduced_bound_constraints:
+            var_bounds_mat, var_bounds_rhs = self.build_reduced_bounds_constraints()
+            self.B = np.vstack([self.B, var_bounds_mat])
+            self.c = np.hstack([self.c, var_bounds_rhs])
+        else:
+            self.lb, self.ub = self.get_x_bounds()
+            self.B = np.vstack([self.B, -np.eye(self.B.shape[1]), np.eye(self.B.shape[1])])
+            self.c = np.hstack([self.c, -self.lb, self.ub])
+
         self.B = sparse.csr_matrix(self.B)
 
         self.dep_idx, self.indep_idx = self.get_variables_to_eliminate(mat=self.A, method=self.elimination_method)
@@ -594,6 +601,69 @@ class RobustModel(BaseOptModel):
         projected_cov = r @ self.cov @ r.T
         self.projected_delta = uncertainty.cholesky_with_zeros(projected_cov)
         self.do_math()
+
+    def build_reduced_range_constraints(self):
+        """
+        A reduced version of the range constraints - Not all variables must have LB and UB
+        The ranges defined in BaseOptModel assign LB and UB for *all* variables, although some of them are redundant
+        To avoid numerical issues (scaling) and decrease memory usage, here we only assign bounds where needed
+
+        Memory is critical.
+        The constraints are second-order-cones. The solver will use epigraph form and add auxiliary
+        variables for each constraint. Therefore, it is essential to reduce the constraints number as much as possible
+
+        Example for redundant bounds:
+            tanks inflow not have to be bounded
+            voltage angles (beside reference bus)
+        """
+        ref_bus_angles_lb = -0.000001
+        ref_bus_angles_ub = 0.000001
+
+        single_t_lb = np.hstack([ref_bus_angles_lb,  # lower bound for ref bus angle
+                                 self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
+                                 np.tile(0, self.n_bat),  # lower bound for batteries charge
+                                 np.tile(0, self.n_bat),  # lower bound for batteries discharge
+                                 np.tile(0, self.n_combs),  # lower bound for combs duration
+                                 self.wds.desal['min_flow'].values,  # desalination lower bound
+                                 ])
+
+        single_t_ub = np.hstack([ref_bus_angles_lb,  # upper bound for ref bus angle
+                                 self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'max_gen_p_pu'],
+                                 self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],
+                                 self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],
+                                 np.tile(1, self.n_combs),  # upper bound for combs duration
+                                 self.wds.desal['max_flow'].values,  # desalination upper bound
+                                 ])
+
+        if self.n_bat_vars == 1:
+            mask = np.ones(len(single_t_lb), dtype=bool)
+            idx_to_drop = [1 + self.n_gen + _ + 1 for _ in range(self.n_bat)]
+            mask[idx_to_drop] = False
+            single_t_lb = single_t_lb[mask]
+            single_t_ub = single_t_ub[mask]
+
+            bat_discharge = -self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge']
+            single_t_lb[1 + self.n_gen: self.n_pds] = bat_discharge
+
+        lb = np.tile(single_t_lb, self.t)
+        ub = np.tile(single_t_ub, self.t)
+
+        if self.pw_segments is not None:
+            lb = np.hstack([lb, np.tile(0, self.n_pw_vars)])
+
+        a1 = np.eye(self.n_tot)  # if we add lb, ub for all variables
+        a1[:, 1: self.n_bus] = 0  # remove bounds for all bus angles except ref bus
+        a1[:, self.n_pds + self.n_combs + self.n_desal: self.n_pds + self.n_wds] = 0  # remove bounds for tanks inflows
+
+        a1 = np.kron(np.eye(self.t, dtype=a1.dtype), a1)
+        a1 = a1[~np.all(a1 == 0, axis=1)]  # drop the rows where constraints are not needed
+        a = np.block([[-a1, np.zeros((a1.shape[0], self.n_pw_vars))],
+                      [np.zeros((self.n_pw_vars, a1.shape[1])), -np.eye(self.n_pw_vars)],
+                      [a1, np.zeros((a1.shape[0], self.n_pw_vars))]])
+
+        b = np.hstack([-lb, ub])
+        pd.DataFrame(np.hstack([a, b.T.reshape(-1, 1)])).to_csv("a.csv")
+        return a, b
 
     def export_matrix(self):
         pd.DataFrame(np.hstack([self.A, self.b.reshape(-1, 1)])).to_csv("eq_mat.csv")
