@@ -8,7 +8,6 @@ class WDS:
     def __init__(self, data_folder):
         self.data_folder = data_folder
         self.real_to_reactive = 0.75
-        self.flows_factor = 1000
 
         # parameters form params.yaml
         self.input_power_units = None
@@ -18,6 +17,8 @@ class WDS:
         with open(os.path.join(self.data_folder, 'params.yaml'), 'r') as f:
             params = yaml.safe_load(f)
             self.__dict__.update(params)
+
+        self.flows_factor = params["flows_factor"]
 
         self.combs = pd.read_csv(os.path.join(self.data_folder, 'combs.csv'), index_col=0)
         self.desal = pd.read_csv(os.path.join(self.data_folder, 'desalination.csv'), index_col=0)
@@ -39,6 +40,8 @@ class WDS:
 
     def scale(self):
         self.combs['flow'] /= self.flows_factor
+        self.desal['min_flow'] /= self.flows_factor
+        self.desal['max_flow'] /= self.flows_factor
         self.demands /= self.flows_factor
         self.demands_std /= self.flows_factor
         self.desal_power *= self.flows_factor

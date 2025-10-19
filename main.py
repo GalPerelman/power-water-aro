@@ -34,7 +34,7 @@ def run_experiment(cfg):
                     "z0": model.z0_val, "z1": model.z1_val, "solver_obj": model.obj.value, "omega": _, "t": model.t,
                     "opt_method": model.opt_method, "pw_segments": 4, "elimination_method": model.elimination_method,
                     "n_bat_vars": model.n_bat_vars, 'manual_indep_variables': model.manual_indep_variables,
-                    "pds_lags": model.pds_lags, "wds_lags": model.wds_lags}
+                    "pds_lags": model.pds_lags, "wds_lags": model.wds_lags, "wds_factor": model.wds.flows_factor}
         stats = {**{"total_time": t_end - t_start}, **model.solution_metrics}
         solution = {**solution, **stats}
 

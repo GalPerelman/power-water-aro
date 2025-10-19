@@ -1,5 +1,6 @@
-name: "wds-a"
+name: "desalination_wds"
 pumps_pf: 0.8
 real_to_reactive: 0.75
 input_power_units: "kw"
 desal_power: 3  # input power units per cubic meter
+flows_factor: 1000  # scaling for numeric stability, found to be critic in the optimization for some of the cases
