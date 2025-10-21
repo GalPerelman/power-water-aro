@@ -627,7 +627,7 @@ class RobustModel(BaseOptModel):
                                  self.wds.desal['min_flow'].values,  # desalination lower bound
                                  ])
 
-        single_t_ub = np.hstack([ref_bus_angles_lb,  # upper bound for ref bus angle
+        single_t_ub = np.hstack([ref_bus_angles_ub,  # upper bound for ref bus angle
                                  self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'max_gen_p_pu'],
                                  self.pds.bus.loc[self.pds.bus['max_charge'] > 0, 'max_charge'],
                                  self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge'],
