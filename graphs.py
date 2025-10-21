@@ -39,7 +39,7 @@ class OptGraphs:
             if inflow.shape[0] != 1:
                 init_vol = np.tile(tank_data['init_vol'], inflow.shape[0]).reshape(-1, 1) * self.wds.flows_factor
             else:
-                init_vol = tank_data['init_vol'] * self.wds.flows_factor
+                init_vol = np.array([tank_data['init_vol'] * self.wds.flows_factor]).reshape(-1, 1)
 
             y = np.hstack([init_vol, tank_data['init_vol'] * self.wds.flows_factor + inflow.cumsum(axis=-1)]).T
             axes[tank_idx].plot(y, color, alpha=self.alpha)
