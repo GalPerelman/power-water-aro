@@ -23,7 +23,7 @@ np.set_printoptions(precision=6)
 
 class BaseOptModel:
     def __init__(self, pds_path, wds_path, t, omega=None, opt_method='aro', elimination_method='manual',
-                 manual_indep_variables=None, pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False,
+                 manual_indep_variables=None, pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=True,
                  **kwargs):
 
         self.pds_path = pds_path
@@ -595,6 +595,8 @@ class RobustModel(BaseOptModel):
 
         self.B = sparse.csr_matrix(self.B)
 
+        self.m = self.B.shape[0]  # number of inequalities
+
         self.dep_idx, self.indep_idx = self.get_variables_to_eliminate(mat=self.A, method=self.elimination_method)
         self.cov, self.delta = uncertainty.affine_mat(self.pds, self.wds, self.t)
         r = self.project_u_to_rhs()  # r is the projection matrix
@@ -660,9 +662,7 @@ class RobustModel(BaseOptModel):
         a = np.block([[-a1, np.zeros((a1.shape[0], self.n_pw_vars))],
                       [np.zeros((self.n_pw_vars, a1.shape[1])), -np.eye(self.n_pw_vars)],
                       [a1, np.zeros((a1.shape[0], self.n_pw_vars))]])
-
         b = np.hstack([-lb, ub])
-        pd.DataFrame(np.hstack([a, b.T.reshape(-1, 1)])).to_csv("a.csv")
         return a, b
 
     def export_matrix(self):
@@ -839,7 +839,7 @@ class RobustModel(BaseOptModel):
         w1 = B_k1 + B_k2 @ self.z1 @ self.z_to_b_map
 
         # modeling 1 - fully vectorized
-        constraint_vector = -self.c + w0 + w1 @ self.b + self.omega_param * cp.norm(w1 @ self.projected_delta, axis=1)
+        constraint_vector = -self.c + w0 + w1 @ self.b + self.omega_param * cp.norm2(w1 @ self.projected_delta, axis=1)
         self.constraints.append(constraint_vector <= 0)
 
         if self.opt_method == 'ro' or self.opt_method == 'det':
@@ -1165,8 +1165,6 @@ class RobustModel(BaseOptModel):
             # these numbers are calculated based on the solver canonical form
             self.solution_metrics['constraint_matrix_density'] = nnz / total_entries if total_entries > 0 else 0
             self.solution_metrics['constraint_matrix_sparsity'] = 1 - (nnz / total_entries) if total_entries > 0 else 0
-
-        print(self.solution_metrics)
 
     def formulate_sparse_opt_problem(self):
         """
