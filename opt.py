@@ -616,8 +616,8 @@ class RobustModel(BaseOptModel):
             tanks inflow not have to be bounded
             voltage angles (beside reference bus)
         """
-        ref_bus_angles_lb = -0.000001
-        ref_bus_angles_ub = 0.000001
+        ref_bus_angles_lb = -0.000000001
+        ref_bus_angles_ub = 0.000000001
 
         single_t_lb = np.hstack([ref_bus_angles_lb,  # lower bound for ref bus angle
                                  self.pds.bus.loc[self.pds.bus['type'] == 'gen', 'min_gen_p_pu'],  # generators lb
