@@ -15,7 +15,7 @@ def affine_mat(pds, wds, t):
 
     load_std = pds.dem_active_std.iloc[:, :t]
     pv_std = pds.pv_std[:, :t].T
-    dem_std = wds.demands_std.iloc[:, :t]
+    dem_std = wds.demands_std.iloc[:t, :]
 
     for _ in range(pds.n_bus):
         block = np.zeros((t, t))
