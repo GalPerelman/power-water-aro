@@ -645,7 +645,7 @@ class RobustModel(BaseOptModel):
             single_t_ub = single_t_ub[mask]
 
             bat_discharge = -self.pds.bus.loc[self.pds.bus['max_discharge'] > 0, 'max_discharge']
-            single_t_lb[1 + self.n_gen: self.n_pds] = bat_discharge
+            single_t_lb[1 + self.n_gen: 1 + self.n_gen + self.n_bat] = bat_discharge
 
         lb = np.tile(single_t_lb, self.t)
         ub = np.tile(single_t_ub, self.t)
