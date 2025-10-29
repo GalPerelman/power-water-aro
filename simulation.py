@@ -60,7 +60,9 @@ class Simulation(opt.RobustModel):
         self.x_nominal, self.x_by_sample = self.extract_x()
         self.graphs = graphs.OptGraphs(self, self.x_by_sample)
         self.solution = {"tanks": {}, "batteries": {}}
-        self.violations = pd.DataFrame()
+        self.violation_counts = pd.DataFrame()
+        self.violation_volume = pd.DataFrame()
+        self.total_violation_volume = pd.DataFrame()
         self.violations_penalty = {}
 
     def projected_cov(self):
@@ -154,8 +156,12 @@ class Simulation(opt.RobustModel):
             tank_lb = np.tile(tank_data['min_vol'], self.t)
             tank_lb[-1] = tank_data['init_vol']
             tank_violations = np.logical_or(np.any(vol - tank_lb < 0, axis=1), np.any(tank_ub - vol < 0, axis=1))
-            self.violations[tank_name] = tank_violations
+            total_violated_volume = (np.sum(np.maximum(0, tank_lb - vol), axis=1)
+                                     + np.sum(np.maximum(0, vol - tank_ub), axis=1))
 
+            self.violation_counts[tank_name] = tank_violations
+            self.violation_volume[tank_name] = total_violated_volume
+            self.total_violation_volume[tank_name] = [total_violated_volume.sum()]
             """
             for case study I_3-bus_desalination_wds_aro:
             Desalination power = 3000 kw = 3 mw
@@ -267,7 +273,7 @@ class Simulation(opt.RobustModel):
         self.calculate_tank_volumes()
         self.calculate_soc()
         self.calculate_costs()
-        violations_rate = self.violations.any(axis=1).sum() / self.n
+        violations_rate = self.violation_counts.any(axis=1).sum() / self.n
         if self.plot:
             self.graphs.tanks_volume()
             self.graphs.plot_generators(shared_y=False)
@@ -289,12 +295,13 @@ def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=Fals
             sim = Simulation(**solution, plot=plot)
             costs, violations_rate = sim.run()
 
-            violations_by_element = sim.violations.sum(axis=0)
+            violations_by_element = sim.violation_counts.sum(axis=0)
             sim_results = {"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(), "std_cost": costs.std(),
                            "cost_skewness": scipy.stats.skew(costs),
                            "solver_obj": solution["solver_obj"],
                            "violations_rate": violations_rate,
                            "violations_penalty": sum(sim.violations_penalty.values()),
+                           "total_violated_vol": sim.total_violation_volume.sum().sum(),
                            "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat}
             sim_results = {**sim_results, **violations_by_element}
 
@@ -313,7 +320,7 @@ def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=Fals
                         sim = Simulation(**solution, plot=plot)
                         costs, violations_rate = sim.run()
 
-                        violations_by_element = sim.violations.sum(axis=0)
+                        violations_by_element = sim.violation_counts.sum(axis=0)
                         sim_results = {"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
                                        "std_cost": costs.std(),
                                        "cost_skewness": scipy.stats.skew(costs),
