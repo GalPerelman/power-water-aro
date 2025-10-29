@@ -7,9 +7,7 @@ import pandas as pd
 import sympy as sp
 import scipy
 from scipy import sparse
-
 import copy
-import gurobipy as gp
 import graphs
 import utils
 import uncertainty
