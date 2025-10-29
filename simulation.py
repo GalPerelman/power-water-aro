@@ -213,12 +213,13 @@ class Simulation(opt.RobustModel):
             if self.n_bus + self.n_gen + bat_idx in self.indep_idx:
                 # if batteries are independent variables - calculate SOC based on the battery variables
                 print("Batteries are INDEPENDENT variables")
+                pass
                 if self.n_bat_vars == 2:
                     x_bat_in = (self.x_by_sample[:, self.n_bus + self.n_gen + bat_idx, :]
-                                 - self.x_by_sample[:, self.n_bus + self.n_gen + self.n_bat + bat_idx, :])
+                                - self.x_by_sample[:, self.n_bus + self.n_gen + self.n_bat + bat_idx, :]).copy()
                 else:
-                    x_bat_in = self.x_by_sample[:, self.n_bus + self.n_gen + bat_idx, :]
-                x_bat_in *= self.pds.pu_to_mw
+                    x_bat_in = self.x_by_sample[:, self.n_bus + self.n_gen + bat_idx, :].copy()
+                x_bat_in *= self.pds.pu_to_power_input_units
 
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
             soc = np.hstack([init_soc, (bat_data['init_storage'] + np.tril(np.ones((self.t, self.t))) @ x_bat_in.T).T])
@@ -228,9 +229,13 @@ class Simulation(opt.RobustModel):
             bat_lb = np.tile(bat_data['min_storage'], self.t + 1)
             bat_lb[-1] = bat_data['init_storage']
 
-            bat_violations = np.logical_or(np.any(soc - bat_lb + self.EPSILON < 0, axis=1),
-                                           np.any(bat_ub - soc + self.EPSILON < 0, axis=1))
-            self.violations[f'B{bat_name}'] = bat_violations
+            if not self.n_bus + self.n_gen + bat_idx in self.indep_idx:
+                bat_violations = np.logical_or(np.any(soc - bat_lb + self.EPSILON < 0, axis=1),
+                                               np.any(bat_ub - soc + self.EPSILON < 0, axis=1))
+                self.violation_counts[f'B{bat_name}'] = bat_violations
+            if self.n_bus + self.n_gen + bat_idx in self.indep_idx:
+                # if batteries are independent variables - SOC violations never happens
+                pass
 
             if self.plot:
                 axes[bat_idx].plot(soc.T, 'C0', alpha=0.3)

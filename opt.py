@@ -1409,11 +1409,24 @@ class RobustModel(BaseOptModel):
 
             init_soc = np.tile(bat_data['init_storage'], x_bat_in.shape[0]).reshape(-1, 1)
             soc = np.hstack([init_soc, (bat_data['init_storage'] + np.tril(np.ones((self.t, self.t))) @ x_bat_in.T).T])
-            bat_ub = np.tile(bat_data['max_storage'], self.t + 1)
-            bat_lb = np.tile(bat_data['min_storage'], self.t + 1)
-            bat_lb[-1] = bat_data['init_storage'] - self.EPSILON
-            bat_violations = np.logical_or(np.any(soc - bat_lb < 0, axis=1), np.any(bat_ub - soc < 0, axis=1))
-            violations[bat_name] = bat_violations
+
+            if not self.n_bus + self.n_gen + bat_idx in self.indep_idx:
+                bat_ub = np.tile(bat_data['max_storage'], self.t + 1)
+                bat_lb = np.tile(bat_data['min_storage'], self.t + 1)
+                bat_lb[-1] = bat_data['init_storage'] - self.EPSILON
+                bat_violations = np.logical_or(np.any(soc - bat_lb < 0, axis=1), np.any(bat_ub - soc < 0, axis=1))
+                violations[bat_name] = bat_violations
+            else:
+                # if batteries are independent variables - SOC violations never happens
+                pass
+
+        for i, (gen_name, gen_data) in enumerate(self.pds.generators.iterrows()):
+            gen_power = self.x_by_sample[:, self.n_bus + i, :] * self.pds.pu_to_mw
+            gen_ub = np.tile(gen_data['max_gen_p'], self.t)
+            gen_lb = np.tile(gen_data['min_gen_p'], self.t)
+            gen_violations = np.logical_or(np.any(gen_power - gen_lb < 0, axis=1),
+                                           np.any(gen_ub - gen_power < 0, axis=1))
+            violations[f'gen_{gen_name}'] = gen_violations
 
         violations['total'] = violations.any(axis=1)
         if self.plot:
