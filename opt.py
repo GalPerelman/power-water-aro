@@ -1006,16 +1006,10 @@ class RobustModel(BaseOptModel):
         self.omega_param.value = self.omega
         formulation_time = time.time() - self.t_formulation_start
         self.problem.solve(
-            solver=cp.GUROBI,
-            verbose=0,
-            reoptimize=True,
-            # canon_backend=cp.SCIPY_CANON_BACKEND,
-            # ignore_dpp=True,
-            BarHomogeneous=1, NumericFocus=1,  # for numeric stability
-            Threads=10,
-            BarConvTol=1e-3, FeasibilityTol=1e-4,  # for run time
-            OutputFlag=0
-                           )
+            solver=cp.MOSEK,
+            verbose=self.solver_display,
+            solver_verbose=True,
+            )
         run_time = self.problem.solver_stats.solve_time
         print(f"Objective (WC): {self.problem.value * self.piecewise_coef_scale} | Formulation time: {formulation_time:.2f} "
               f"| Solver time: {run_time}")
