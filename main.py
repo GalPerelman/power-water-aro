@@ -32,8 +32,9 @@ def run_experiment(cfg):
         wc_cost, avg_cost, max_cost, csr = model.analyze_solution(n=1000)
         solution = {"pds_path": model.pds_path, "wds_path": model.wds_path,
                     "z0": model.z0_val, "z1": model.z1_val, "solver_obj": model.obj.value, "omega": _, "t": model.t,
-                    "opt_method": model.opt_method, "pw_segments": 4, "elimination_method": model.elimination_method,
-                    "n_bat_vars": model.n_bat_vars, 'manual_indep_variables': model.manual_indep_variables,
+                    "opt_method": model.opt_method, "pw_segments": model.pw_segments,
+                    "elimination_method": model.elimination_method, "n_bat_vars": model.n_bat_vars,
+                    "manual_indep_variables": model.manual_indep_variables,
                     "pds_lags": model.pds_lags, "wds_lags": model.wds_lags, "wds_factor": model.wds.flows_factor}
         stats = {**{"total_time": t_end - t_start}, **model.solution_metrics}
         solution = {**solution, **stats}
@@ -62,11 +63,17 @@ def analyze_data_latency(cfg, omega=1, pds_latencies=None, wds_latencies=None):
             model.wds_lat = wds_lat
             model.formulate_vectorized_opt_problem()
             model.omega = omega
+            t_start = time.time()
             model.solve()
+            t_end = time.time()
             solution = {"pds_path": model.pds_path, "wds_path": model.wds_path, "z0": model.z0_val, "z1": model.z1_val,
                         "solver_obj": model.obj.value, "omega": omega, "t": model.t,"opt_method": model.opt_method,
-                        "pw_segments": 4, "elimination_method": model.elimination_method,
-                        "n_bat_vars": model.n_bat_vars, 'manual_indep_variables': model.manual_indep_variables}
+                        "pw_segments": model.pw_segments, "elimination_method": model.elimination_method,
+                        "n_bat_vars": model.n_bat_vars, 'manual_indep_variables': model.manual_indep_variables,
+                        "pds_lags": model.pds_lags, "wds_lags": model.wds_lags, "wds_factor": model.wds.flows_factor}
+
+            stats = {**{"total_time": t_end - t_start}, **model.solution_metrics}
+            solution = {**solution, **stats}
             wc_cost, avg_cost, max_cost, csr = model.analyze_solution(n=1000)
             df = pd.concat([df, pd.DataFrame({"wc": wc_cost, "avg": avg_cost, "max": max_cost, "r": csr,
                                               "pds_lat": pds_lat, "wds_lat": wds_lat}, index=[len(df)])])
