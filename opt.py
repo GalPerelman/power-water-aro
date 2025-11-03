@@ -836,9 +836,6 @@ class RobustModel(BaseOptModel):
         self.c = self.c.astype('float32')
         self.b = self.b.astype('float32')
 
-        self.b[self.b <= 10 ** -10] = 0  # numerical stability
-        self.c[self.c <= 10 ** -10] = 0  # numerical stability
-        self.projected_delta[self.projected_delta <= 10 ** -10] = 0  # numerical stability
         self.projected_delta = sparse.csr_matrix(self.projected_delta.astype("float32"))
         w0 = B_k2 @ self.z0
         w1 = B_k1 + B_k2 @ self.z1 @ self.z_to_b_map
