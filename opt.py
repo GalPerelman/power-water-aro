@@ -567,6 +567,7 @@ class RobustModel(BaseOptModel):
         self.n_uncertain_bus_per_t = None
         self.z_to_b_map = None
         self.ldr_to_z_map = {}
+        self.z1_sparsity_mask = None
 
         self.obj = None
         self.x = None
@@ -818,6 +819,8 @@ class RobustModel(BaseOptModel):
 
         # flip nonanticipative mat - constraint is on the elements not included
         nonanticipative_mat = 1 - nonanticipative_mat
+        self.z1_sparsity_mask = (nonanticipative_mat == 0)
+
         self.z0 = cp.Variable(self.n_indep_per_t * self.t)
         self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t),
                               sparsity=np.where(nonanticipative_mat == 0))
