@@ -524,7 +524,7 @@ class RobustModel(BaseOptModel):
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables=None,
                  pw_segments=None, n_bat_vars=2, solver_params=None, solver_display=False,
                  pds_lat=0, wds_lat=0, pds_lags=None, wds_lags=None, reduced_bound_constraints=True,
-                 plot=False, **kwargs):
+                 plot=False, small_value_pruning=True, **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display, **kwargs)
 
@@ -538,7 +538,9 @@ class RobustModel(BaseOptModel):
         if self.wds_lags is None:
             self.wds_lags = self.t
 
+        # flags
         self.reduced_bound_constraints = reduced_bound_constraints
+        self.small_value_pruning = small_value_pruning
         self.plot = plot
 
         # matrices for time based formulation
@@ -835,6 +837,11 @@ class RobustModel(BaseOptModel):
         self.z_to_b_map = sparse.csr_matrix(self.z_to_b_map.astype('float32'))
         self.c = self.c.astype('float32')
         self.b = self.b.astype('float32')
+
+        if self.small_value_pruning:
+            self.b[self.b <= 10 ** -10] = 0
+            self.c[self.c <= 10 ** -10] = 0
+            self.projected_delta[self.projected_delta <= 10 ** -10] = 0  # reduce memory usage
 
         self.projected_delta = sparse.csr_matrix(self.projected_delta.astype("float32"))
         w0 = B_k2 @ self.z0
