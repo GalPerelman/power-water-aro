@@ -1018,7 +1018,7 @@ class RobustModel(BaseOptModel):
         if self.z1 is None:
             self.z1_val = np.zeros((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
         elif isinstance(self.z1, cp.Variable):
-            self.z1_val = self.z1.value
+            self.z1_val = self.z1.value_sparse.toarray()
         elif isinstance(self.z1, dict):
             # this is for the reduced problem formulation - z1 is a dict of cvxpy variables
             self.z1_val = np.zeros((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t))
