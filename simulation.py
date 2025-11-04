@@ -1,5 +1,5 @@
 import math
-import pickle
+import os.path
 
 import matplotlib.pyplot as plt
 import scipy.stats
@@ -10,6 +10,7 @@ import pandas as pd
 import graphs
 import opt
 import uncertainty
+import utils
 
 np.set_printoptions(linewidth=10 ** 5)
 np.set_printoptions(suppress=True)
@@ -280,18 +281,12 @@ class Simulation(opt.RobustModel):
         return self.costs, violations_rate
 
 
-def read_solution(sol_path):
-    with open(sol_path, "rb") as f:
-        solution = pickle.load(f)
-        return solution
-
-
 def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=False, plot=False,
                         pds_latencies=None, wds_latencies=None):
     df = pd.DataFrame()
     for i, theta in enumerate(thetas):
         try:
-            solution = read_solution(sol_path=f"{experiment_path}_{theta}.pkl")
+            solution = utils.read_solution(sol_path=f"{experiment_path}_{theta}.pkl")
             sim = Simulation(**solution, plot=plot)
             costs, violations_rate = sim.run()
 
@@ -316,7 +311,7 @@ def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=Fals
                 for wds_lat in wds_latencies:
                     try:
                         sol_path = f"{experiment_path}_{theta}_pdslat-{pds_lat}_wdslat-{wds_lat}.pkl"
-                        solution = read_solution(sol_path=sol_path)
+                        solution = utils.read_solution(sol_path=sol_path)
                         sim = Simulation(**solution, plot=plot)
                         costs, violations_rate = sim.run()
 
@@ -351,7 +346,11 @@ def plot_advanced_por(experiment_path):
     fig2, axes2 = plt.subplots(nrows=2, ncols=1, sharex=True)
     axes2 = axes2.ravel()
     for i, theta in enumerate(thetas):
-        solution = read_solution(sol_path=f"{experiment_path}_aro_{theta}.pkl")
+        try:
+            solution = utils.read_solution(sol_path=os.path.join(aro_solution_dir, f"{experiment_name}_aro_{theta}.pkl"))
+        except FileNotFoundError as e:
+            print(e)
+            continue
         sim = Simulation(**solution, plot=False)
         costs, violations_rate = sim.run()
         aro = pd.concat([aro, pd.DataFrame({"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
@@ -359,7 +358,11 @@ def plot_advanced_por(experiment_path):
                                             "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat, 'costs': [costs]},
                                            index=[len(aro)])])
 
-        solution = read_solution(sol_path=f"{experiment_path}_ro_{theta}.pkl")
+        try:
+            solution = utils.read_solution(sol_path=os.path.join(ro_solution_dir, f"{experiment_name}_ro_{theta}.pkl"))
+        except FileNotFoundError as e:
+            print(e)
+            continue
         sim = Simulation(**solution, plot=False)
         costs, violations_rate = sim.run()
         ro = pd.concat([ro, pd.DataFrame({"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
@@ -455,7 +458,7 @@ def plot_ro_vs_aro(ro_path, aro_path, thetas):
     batteries_fig, batteries_ax = plt.subplots()
 
     for i, theta in enumerate(thetas):
-        ro = read_solution(sol_path=f"{ro_path}_{theta}.pkl")
+        ro = utils.read_solution(sol_path=f"{ro_path}_{theta}.pkl")
         sim = Simulation(**ro, plot=False)
         costs, violations_rate = sim.run()
         tanks_fig = sim.graphs.tanks_volume(color="C1", leg_label="RO")
@@ -465,7 +468,7 @@ def plot_ro_vs_aro(ro_path, aro_path, thetas):
             batteries_ax.grid(True)
             batteries_ax.plot(sim.solution["batteries"][bat_name].T[:, 0], 'C1', label="RO")
 
-        aro = read_solution(sol_path=f"{aro_path}_{theta}.pkl")
+        aro = utils.read_solution(sol_path=f"{aro_path}_{theta}.pkl")
         sim = Simulation(**aro, plot=False)
         costs, violations_rate = sim.run()
         tanks_fig = sim.graphs.tanks_volume(fig=tanks_fig, color='C0', leg_label="ARO")

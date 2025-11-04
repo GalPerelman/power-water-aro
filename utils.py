@@ -1,4 +1,6 @@
 import os
+import pickle
+
 import numpy as np
 import pandas as pd
 import argparse
@@ -161,3 +163,9 @@ def int_or_float(value):
             return float(value)
         except ValueError:
             raise argparse.ArgumentTypeError(f"Expected an int or a float, but got {value!r}")
+
+
+def read_solution(sol_path):
+    with open(sol_path, "rb") as f:
+        solution = pickle.load(f)
+        return solution
