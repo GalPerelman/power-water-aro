@@ -22,8 +22,9 @@ pd.set_option('display.width', 1000)
 
 class Simulation(opt.RobustModel):
     def __init__(self, pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
-                 z0, z1, plot,
-                 pw_segments=None, n_bat_vars=1, solver_params=None, solver_display=False, n=1000, **kwargs):
+                 z0, z1, plot, pw_segments=None, n_bat_vars=1, solver_params=None, solver_display=False,
+                 # simulation arguments
+                 n=1000, sample=None, **kwargs):
         super().__init__(pds_path, wds_path, t, omega, opt_method, elimination_method, manual_indep_variables,
                          pw_segments, n_bat_vars, solver_params, solver_display)
 
@@ -31,7 +32,7 @@ class Simulation(opt.RobustModel):
         self.z1_val = z1
         self.n = n
         self.plot = plot
-
+        self.sample = sample
         self.costs = None
 
         # OLD
@@ -44,12 +45,16 @@ class Simulation(opt.RobustModel):
 
         # get the nominal values - arranged according to the projected cov rows!
         # This means mu is not like the opt RHS
-        loads = self.pds.dem_active.values[:, :self.t].flatten()
-        injections = np.multiply(self.pds.bus['max_pv_pu'].values,
-                                 self.pds.max_gen_profile.values[:, :self.t].T).T.flatten()
-        demands = self.wds.demands.values[:self.t, :].flatten('F')
-        mu = np.hstack([loads, injections, demands])
-        self.sample = uncertainty.draw_multivariate(mu=mu, cov=self.cov, n=self.n)
+        if sample is None:
+            loads = self.pds.dem_active.values[:, :self.t].flatten()
+            injections = np.multiply(self.pds.bus['max_pv_pu'].values,
+                                     self.pds.max_gen_profile.values[:, :self.t].T).T.flatten()
+            demands = self.wds.demands.values[:self.t, :].flatten('F')
+            mu = np.hstack([loads, injections, demands])
+            self.sample = uncertainty.draw_multivariate(mu=mu, cov=self.cov, n=self.n)
+        else:
+            self.sample = sample
+
         self.sample[self.sample < 0] = 0
         self.sample_loads = self.switch_leading_index(self.sample[:self.n_bus * self.t, :], self.n_bus, n=self.n)
         self.sample_pv = self.switch_leading_index(self.sample[self.n_bus * self.t: 2 * self.n_bus * self.t, :],
