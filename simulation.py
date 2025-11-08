@@ -69,6 +69,7 @@ class Simulation(opt.RobustModel):
         self.violation_counts = pd.DataFrame()
         self.violation_volume = pd.DataFrame()
         self.total_violation_volume = pd.DataFrame()
+        self.violation_dispatch = pd.DataFrame()
         self.violations_penalty = {}
 
     def projected_cov(self):
@@ -262,6 +263,23 @@ class Simulation(opt.RobustModel):
                      rotation='vertical')
             fig.subplots_adjust(bottom=0.14, top=0.95)
 
+    def calculate_generators(self):
+        for i, (gen_name, gen_data) in enumerate(self.pds.generators.iterrows()):
+
+            # only for dependent generators:
+            if not self.n_bus + i in self.indep_idx:
+                gen_power = self.x_by_sample[:, self.n_bus + i, :] * self.pds.pu_to_mw
+                gen_ub = np.tile(gen_data['max_gen_p'], self.t)
+                gen_lb = np.tile(gen_data['min_gen_p'], self.t)
+                gen_violations = np.logical_or(np.any(gen_power - gen_lb < 0, axis=1),
+                                               np.any(gen_ub - gen_power < 0, axis=1))
+                self.violation_counts[f'gen_{gen_name}'] = gen_violations
+
+                total_violated_dispatch = (np.sum(np.maximum(0, gen_lb - gen_power), axis=1)
+                                         + np.sum(np.maximum(0, gen_power - gen_ub), axis=1))
+
+                self.violation_dispatch[gen_name] = total_violated_dispatch
+
     def calculate_costs(self):
         self.costs = self.calculate_piecewise_linear_result(self.x_by_sample).sum(axis=(1, 2))
 
@@ -279,6 +297,7 @@ class Simulation(opt.RobustModel):
         self.calculate_tank_volumes()
         self.calculate_soc()
         self.calculate_costs()
+        self.calculate_generators()
         violations_rate = self.violation_counts.any(axis=1).sum() / self.n
         if self.plot:
             self.graphs.tanks_volume()
@@ -302,6 +321,7 @@ def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=Fals
                            "violations_rate": violations_rate,
                            "violations_penalty": sum(sim.violations_penalty.values()),
                            "total_violated_vol": sim.total_violation_volume.sum().sum(),
+                           "total_violated_dispatch": sim.violation_dispatch.sum().sum(),
                            "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat}
             sim_results = {**sim_results, **violations_by_element}
 
