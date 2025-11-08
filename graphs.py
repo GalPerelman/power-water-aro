@@ -120,6 +120,44 @@ class OptGraphs:
         fig.subplots_adjust(left=0.1, bottom=0.15, top=0.9, right=0.92, wspace=0.2)
         return fig
 
+    def plot_pumping_stations(self):
+        desal_idx = [self.model.n_pds + self.model.n_combs + _ for _ in range(self.model.n_desal)]
+        combs_idx = [self.model.n_pds + _ for _ in range(self.model.n_combs)]
+        combs_power = self.wds.combs['total_power'].values
+        combs_power = combs_power.reshape(1, len(combs_power), 1)
+
+        combs_flow = self.wds.combs['flow'].values
+        combs_flow = combs_flow.reshape(1, len(combs_flow), 1)
+
+        pumps_power = self.x[:, combs_idx, :] * combs_power * self.model.wds_power_units_factor
+        pumps_flow = self.x[:, combs_idx, :] * combs_flow * self.model.wds.flows_factor
+
+        ncols = max(1, math.ceil(math.sqrt(self.model.wds.n_stations)))
+        nrows = max(1, int(math.ceil(self.model.wds.n_stations / ncols)))
+        wds_pumping_stations = self.wds.combs['station'].unique()
+
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True)
+        axes = np.atleast_2d(axes).ravel()
+        for i, station_name in enumerate(wds_pumping_stations):
+            station_idx = self.wds.combs.loc[self.wds.combs['station'] == station_name].index
+            axes[i].plot(pumps_flow[:, station_idx, :].sum(axis=1).T, 'C0', alpha=self.alpha)
+            axes[i].grid()
+
+        fig.text(0.5, 0.04, 'Time (hr)', ha='center')
+        fig.text(0.02, 0.55, f'Pumping Station Flow ($m^3/hr$)', va='center', rotation='vertical')
+
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True)
+        axes = np.atleast_2d(axes).ravel()
+        for i, station_name in enumerate(wds_pumping_stations):
+            station_idx = self.wds.combs.loc[self.wds.combs['station'] == station_name].index
+            axes[i].plot(pumps_power[:, station_idx, :].sum(axis=1).T * self.pds.pu_to_power_input_units,
+                         'C0', alpha=self.alpha)
+            axes[i].grid()
+
+        fig.text(0.5, 0.04, 'Time (hr)', ha='center')
+        fig.text(0.02, 0.55, f'Pumping Station Power ({self.pds.input_power_units.upper()})', va='center',
+                 rotation='vertical')
+
 
 class ConstantAwareLocator(Locator):
     """
