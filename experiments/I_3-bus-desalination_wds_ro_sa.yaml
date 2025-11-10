@@ -8,7 +8,7 @@ n_bat_vars: 1
 elimination_method: manual
 manual_indep_variables: [0, 3, 4, 6, 7, 8, 9]
 omegas: [0.5, 1, 1.5, 2, 2.5, 3]
-export: true
+export: "output/I_ro_sa"
 
 
 # θ0, θ1, θ2, gen0, gen1, bat_c, c0, c1, c2, d0, t0, t1

@@ -8,7 +8,7 @@ n_bat_vars: 1
 elimination_method: manual
 manual_indep_variables: [0, 3, 5, 6, 7, 8, 9]
 omegas: [0.5, 1, 1.5, 2, 2.5, 3]
-export: true
+export: "output/I_aro"
 small_value_pruning: false
 
 
