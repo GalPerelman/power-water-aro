@@ -1119,55 +1119,41 @@ class RobustModel(BaseOptModel):
         self.solution_metrics['num_soc_constraints'] = soc_count
 
         # sparsity
-        solvers_to_try = [cp.GUROBI, cp.MOSEK, cp.SCS, cp.ECOS, cp.CLARABEL]
-        problem_data = None
-        solver_used = None
-
-        for solver in solvers_to_try:
+        data_any = None
+        for solver in (cp.MOSEK, cp.SCS, cp.ECOS, cp.CLARABEL, cp.SCS):
             try:
-                problem_data = self.problem.get_problem_data(solver)
-                solver_used = solver
+                data_any, _, _ = self.problem.get_problem_data(solver)
                 break
-            except:
+            except Exception:
                 continue
 
-        if problem_data is None:
-            print("Warning: Could not compile problem with any available solver")
-            return
+        A_mat = None
+        if data_any:
+            # pick the largest genuine 2-D constraint matrix; skip vectors like 'c', 'b'
+            candidates = []
+            for k, v in data_any.items():
+                shp = getattr(v, "shape", None)
+                if shp and len(shp) == 2 and shp[0] > 0 and shp[1] > 0:
+                    candidates.append((k, v, shp[0] * shp[1]))
+            if candidates:
+                # choose the biggest by element count
+                candidates.sort(key=lambda kvs: kvs[2], reverse=True)
+                A_key, A_mat, _ = candidates[0]
 
-        data = problem_data[0]
-
-        # Get constraint matrix - try multiple possible keys
-        constraint_matrix = None
-        matrix_keys = ['A', 'G', 'F', 'c']  # Different solvers use different keys
-
-        for key in matrix_keys:
-            if key in data and data[key] is not None:
-                mat = data[key]
-                if hasattr(mat, 'shape'):
-                    constraint_matrix = mat
-                    break
-
-        # Analyze sparsity of the main constraint matrix
-        if constraint_matrix is not None:
-            total_entries = constraint_matrix.shape[0] * constraint_matrix.shape[1]
-            nnz = None  # number of non-zeros
-            if hasattr(constraint_matrix, 'nnz'):
-                nnz = constraint_matrix.nnz
-            elif hasattr(constraint_matrix, 'count_nonzero'):
-                nnz = constraint_matrix.count_nonzero()
-            else:
-                try:
-                    nnz = np.count_nonzero(constraint_matrix)
-                except Exception as e:
-                    try:
-                        nnz = np.count_nonzero(constraint_matrix.toarray())
-                    except Exception as e2:
-                        pass
-
-            # these numbers are calculated based on the solver canonical form
-            self.solution_metrics['constraint_matrix_density'] = nnz / total_entries if total_entries > 0 else 0
-            self.solution_metrics['constraint_matrix_sparsity'] = 1 - (nnz / total_entries) if total_entries > 0 else 0
+        if A_mat is not None:
+            m, n = A_mat.shape
+            self.solution_metrics["solver_rows"] = int(m)
+            self.solution_metrics["solver_cols"] = int(n)
+            nnz = int(A_mat.nnz) if sparse.issparse(A_mat) else int(np.count_nonzero(A_mat))
+            self.solution_metrics["nnz"] = nnz
+            density = (nnz / (m * n)) if (m * n) else 0.0
+            self.solution_metrics["constraint_matrix_density_pct"] = 100.0 * density
+            self.solution_metrics["constraint_matrix_sparsity_pct"] = 100.0 * (1.0 - density)
+        else:
+            self.solution_metrics.update({
+                "solver_rows": None, "solver_cols": None, "nnz": None,
+                "constraint_matrix_density_pct": None, "constraint_matrix_sparsity_pct": None
+            })
 
     def formulate_sparse_opt_problem(self):
         """
