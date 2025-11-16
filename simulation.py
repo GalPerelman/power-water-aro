@@ -305,13 +305,13 @@ class Simulation(opt.RobustModel):
         return self.costs, violations_rate
 
 
-def simulate_experiment(experiment_path, thetas, export=False, analyze_lags=False, plot=False,
+def simulate_experiment(experiment_path, thetas, n=1000, export=False, analyze_lags=False, plot=False,
                         pds_latencies=None, wds_latencies=None):
     df = pd.DataFrame()
     for i, theta in enumerate(thetas):
         try:
             solution = utils.read_solution(sol_path=f"{experiment_path}_{theta}.pkl")
-            sim = Simulation(**solution, plot=plot)
+            sim = Simulation(**solution, plot=plot, n=n)
             costs, violations_rate = sim.run()
 
             violations_by_element = sim.violation_counts.sum(axis=0)
@@ -479,12 +479,12 @@ def plot_advanced_por(experiment_path):
     fig2.subplots_adjust(left=0.13, right=0.97, top=0.96, bottom=0.12, hspace=0.06)
 
 
-def plot_ro_vs_aro(ro_path, aro_path, thetas):
+def plot_ro_vs_aro(ro_path, aro_path, thetas, n,
     batteries_fig, batteries_ax = plt.subplots()
 
     for i, theta in enumerate(thetas):
         ro = utils.read_solution(sol_path=f"{ro_path}_{theta}.pkl")
-        sim = Simulation(**ro, plot=False)
+        sim = Simulation(**ro, plot=False, n=n)
         costs, violations_rate = sim.run()
         tanks_fig = sim.graphs.tanks_volume(color="C1", leg_label="RO")
         generators_fig = sim.graphs.plot_generators(shared_y=False, color="C1", leg_label="RO", zo=5)
@@ -494,7 +494,7 @@ def plot_ro_vs_aro(ro_path, aro_path, thetas):
             batteries_ax.plot(sim.solution["batteries"][bat_name].T[:, 0], 'C1', label="RO")
 
         aro = utils.read_solution(sol_path=f"{aro_path}_{theta}.pkl")
-        sim = Simulation(**aro, plot=False)
+        sim = Simulation(**aro, plot=False, n=n)
         costs, violations_rate = sim.run()
         tanks_fig = sim.graphs.tanks_volume(fig=tanks_fig, color='C0', leg_label="ARO")
         generators_fig = sim.graphs.plot_generators(shared_y=False, fig=generators_fig, color="C0", leg_label="ARO",
