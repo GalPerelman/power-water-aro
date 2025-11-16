@@ -1,0 +1,27 @@
+name: "IV_ieee24-national-wds"
+pds_path: "data/ieee24"
+wds_path: "data/national_wds"
+t: 24
+opt_method: "aro"
+pw_segments: 3
+n_bat_vars: 1
+elimination_method: manual
+manual_indep_variables: [0, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
+omegas: [0.5, 1, 1.5, 2, 2.5, 3]
+pds_lags: 3
+wds_lags: 3
+export: "output/IV_aro"
+small_value_pruning: false
+
+
+# θ0, θ1, θ2, θ3, θ4, θ5, θ6, θ7, θ8, θ9, θ10, θ11, θ12, θ13, θ14, θ15, θ16, θ17, θ18, θ19, θ20, θ21, θ22, θ23
+#  0,  1,  2,  3,  4,  5,  6,  7,  8,   9, 10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  20,  21,  22,  23
+
+# gen0, gen1, gen2, gen3, gen4, gen5, gen6, gen7, gen8, gen9, bat_c,
+#   24,   25,   26,   27,   28,   29,   30,   31,   32,   33,    34,
+
+# comb0, comb1, comb2, comb3, comb4, comb5, comb6, comb7, comb8, comb9, comb10, comb11,
+#    35,    36,    37,    38,    39,    40,    41,    42,    43,    44,     45,     46,
+
+# desal0, desal0, tank0, tank1, tank2, tank3, tank4
+#     47,     48,    49,    50,    51,    52,    53
