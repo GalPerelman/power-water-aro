@@ -509,7 +509,7 @@ class StandardDCPF(BaseOptModel):
 
     def solve(self):
         self.problem = cp.Problem(cp.Minimize(self.piecewise_costs @ self.x), self.constraints)
-        self.problem.solve(solver=cp.GUROBI, reoptimize=True)
+        self.problem.solve(solver=cp.MOSEK)
         obj, status, solver_time = self.problem.value, self.problem.status, self.problem.solver_stats.solve_time
 
         run_time = self.problem.solver_stats.solve_time
@@ -619,7 +619,7 @@ class RobustModel(BaseOptModel):
             tanks inflow not have to be bounded
             voltage angles (beside reference bus)
         """
-        ref_bus_angles_lb = -0.000000001
+        ref_bus_angles_lb = 0.000000001
         ref_bus_angles_ub = 0.000000001
 
         single_t_lb = np.hstack([ref_bus_angles_lb,  # lower bound for ref bus angle
@@ -838,10 +838,10 @@ class RobustModel(BaseOptModel):
         self.c = self.c.astype('float32')
         self.b = self.b.astype('float32')
 
-        if self.small_value_pruning:
-            self.b[self.b <= 10 ** -10] = 0
-            self.c[self.c <= 10 ** -10] = 0
-            self.projected_delta[self.projected_delta <= 10 ** -10] = 0  # reduce memory usage
+        # if self.small_value_pruning:
+        #     self.b[self.b <= 10 ** -10] = 0
+        #     self.c[self.c <= 10 ** -10] = 0
+        #     self.projected_delta[self.projected_delta <= 10 ** -10] = 0  # reduce memory usage
 
         self.projected_delta = sparse.csr_matrix(self.projected_delta.astype("float32"))
         w0 = B_k2 @ self.z0
@@ -893,6 +893,132 @@ class RobustModel(BaseOptModel):
         self.constraints.append(
             -self.obj + Obj0 + Obj1 @ self.b + self.omega_param * cp.norm(Obj1 @ self.projected_delta, axis=1) <= 0)
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
+
+    def solve_robust_benders(self, max_iters=100, tol=1e-4):
+        # Master problem - START SMALL (no robust constraints yet!)
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        self.t_formulation_start = time.time()
+
+        n_indep_no_pw = self.n_indep_per_t - self.n_gen
+        certain_bus_per_t = [_ for _ in self.get_certain_bus() if _ < self.n_bus]
+        n_uncertain_bus_per_t = self.n_bus - len(certain_bus_per_t)
+        loads_block = self.get_ldr_block(n=n_indep_no_pw, k=n_uncertain_bus_per_t, T=self.t,
+                                         lags=self.pds_lags, lat=self.pds_lat)
+        dem_block = self.get_ldr_block(n=n_indep_no_pw, k=self.n_tanks, T=self.t, lags=self.wds_lags, lat=self.wds_lat)
+        pw_loads_block = self.get_ldr_block(n=self.n_gen, k=n_uncertain_bus_per_t, T=self.t,
+                                            lags=self.pds_lags, lat=self.pds_lat)
+        pw_dem_block = self.get_ldr_block(n=self.n_gen, k=self.n_tanks, T=self.t, lags=self.wds_lags, lat=self.wds_lat)
+        nonanticipative_mat = np.block([[loads_block, dem_block], [pw_loads_block, pw_dem_block]])
+
+        # flip nonanticipative mat - constraint is on the elements not included
+        nonanticipative_mat = 1 - nonanticipative_mat
+        sparse_indices = np.where(nonanticipative_mat == 0)
+        z1_sparsity_mask = (nonanticipative_mat == 0)
+
+        self.z0 = cp.Variable(self.n_indep_per_t * self.t)
+        self.z1 = cp.Variable((self.n_indep_per_t * self.t, self.n_uncertain_per_t * self.t),
+                              sparsity=sparse_indices)
+
+        self.obj = cp.Variable(1)
+        self.omega_param = self.omega  #cp.Parameter(nonneg=True)
+
+        B_k2 = sparse.csr_matrix(self.B.dot(self._k2))
+        B_k1 = sparse.csr_matrix(self.B.dot(self._k1))
+
+        B_k2 = sparse.csr_matrix(B_k2.astype('float64'))
+        B_k1 = sparse.csr_matrix(B_k1.astype('float64'))
+        self.z_to_b_map = sparse.csr_matrix(self.z_to_b_map.astype('float64'))
+        self.c = self.c.astype('float64')
+        self.b = self.b.astype('float64')
+        self.projected_delta = self.projected_delta.astype("float64")
+        w0 = B_k2 @ self.z0
+        w1 = B_k1 + B_k2 @ self.z1 @ self.z_to_b_map
+
+        # modeling 1 - fully vectorized
+        # constraint_vector = -self.c + w0 + w1 @ self.b + self.omega_param * cp.norm2(w1 @ self.projected_delta, axis=1)
+        # self.constraints.append(constraint_vector <= 0)
+
+        # Initial master: Only your "easy" constraints (no L2 norms!)
+        # For example, bounds, linear constraints, etc.
+        master_constraints = [self.z0 >= 0]
+
+        init_rows = [self.m - 1 - i for i in range(len(self.lb) * 2)]
+        for i in init_rows:
+            w1_row = B_k1[i, :] + B_k2[i, :] @ self.z1 @ self.z_to_b_map
+            constraint_val = (-self.c[i] + (B_k2[i, :] @ self.z0) + w1_row @ self.b +
+                              self.omega_param * cp.norm2(w1_row @ self.projected_delta))
+            master_constraints.append(constraint_val <= 0)
+
+        f = self.piecewise_costs.reshape(1, -1)
+        f_k2 = f.dot(self._k2.toarray())
+        f_k1 = f.dot(self._k1.toarray())
+        f_k2 = sparse.csr_matrix(f_k2.astype('float64'))
+        f_k1 = sparse.csr_matrix(f_k1.astype('float64'))
+        Obj0 = f_k2 @ self.z0
+        Obj1 = f_k1 + f_k2 @ self.z1 @ self.z_to_b_map
+        master_constraints.append(
+            -self.obj + Obj0 + Obj1 @ self.b + self.omega_param * cp.norm(Obj1 @ self.projected_delta, axis=1) <= 0)
+
+        # Initially, no robust constraints at all!
+        iteration = 0
+        t0 = time.time()
+        while iteration < max_iters:
+            if iteration > 0:
+                self.z0.value = z0_val
+                # Warm start for sparse variables
+                # Note: We use _value directly instead of .value due to a bug in CVXPY where the validation incorrectly checks against the full matrix shape
+                # instead of the sparse representation shape. This is a known issue where sparse variables expect a 1D array of length equal to the number of
+                # non-zero elements, but the validator checks against the original variable shape.
+                z1_sparse = z1_val[z1_sparsity_mask]
+                self.z1._value = z1_sparse
+
+            master_prob = cp.Problem(cp.Minimize(self.obj), master_constraints)
+            master_prob.solve(solver=cp.GUROBI, verbose=self.solver_display,
+                              reoptimize=True,
+                              BarHomogeneous=1, NumericFocus=1,  # for numeric stability
+                              Threads=10,
+                              BarConvTol=1e-3, FeasibilityTol=1e-2,  # for run time
+                              OutputFlag=0,
+                              warm_start=True
+                              )
+            print(iteration, master_prob.status, master_prob.value, time.time()-t0)
+            z0_val = self.z0.value
+            z1_val = self.z1.value.toarray()
+
+            # STEP 2: Given z0, z1, find worst-case constraint violation
+            # Compute w1 with the current solution
+            w1_val = B_k1 + B_k2 @ z1_val @ self.z_to_b_map
+
+            # For ellipsoidal uncertainty, worst-case is CLOSED FORM:
+            # max_{||ξ||≤1} (w1 @ (b + Σ @ ξ)) = w1 @ b + ||w1 @ Σ||_2
+
+            # Compute worst-case violation for EACH constraint
+            nominal_part = -self.c + (B_k2 @ z0_val) + w1_val @ self.b
+            uncertainty_part = np.linalg.norm(w1_val @ self.projected_delta, axis=1)
+            worst_case_violations = nominal_part + self.omega_param * uncertainty_part
+
+            # Find maximum violation
+            max_violation = np.max(worst_case_violations)
+            violated_idx = np.argmax(worst_case_violations)
+
+            # STEP 3: Check convergence
+            if max_violation <= tol:
+                print(f"Converged in {iteration} iterations!")
+                break
+
+            # STEP 4: Add only ONE (or a few) cutting plane(s)
+            # This is a LINEAR constraint, not SOCP!
+            # The cut says: "theta must be at least this violated value"
+
+            # Add constraint for the most violated row
+            w1_row = B_k1[violated_idx, :] + B_k2[violated_idx, :] @ self.z1 @ self.z_to_b_map
+            constraint_val = (-self.c[violated_idx] + (B_k2[violated_idx, :] @ self.z0) +
+                              w1_row @ self.b + self.omega_param * cp.norm2(w1_row @ self.projected_delta))
+
+            master_constraints.append(constraint_val <= 0)
+            iteration += 1
+
+        return z0_val, z1_val
 
     def formulate_opt_problem(self):
         """
@@ -1241,6 +1367,7 @@ class RobustModel(BaseOptModel):
         self.problem = cp.Problem(cp.Minimize(self.obj), constraints=self.constraints)
 
     def extract_solution_experimental_opt_formulation(self):
+        """ Not in use """
         if self.z1 is None:
             z1 = np.zeros((self.n_indep_per_t * self.t, self.b.shape[0]))
         else:
@@ -1425,6 +1552,7 @@ class RobustModel(BaseOptModel):
         if self.plot:
             g = graphs.OptGraphs(self, self.x_by_sample)
             g.tanks_volume()
+            g.plot_generators()
             g.soc(soc_to_plot=soc)
 
         wc_cost = self.problem.value * self.piecewise_coef_scale
