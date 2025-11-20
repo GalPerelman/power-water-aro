@@ -4,8 +4,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import ticker as mtick
-from matplotlib.ticker import ScalarFormatter, FormatStrFormatter, AutoLocator, Locator
-from matplotlib.lines import Line2D
+from matplotlib.ticker import ScalarFormatter, AutoLocator, Locator, MaxNLocator
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
@@ -30,7 +30,7 @@ class OptGraphs:
         nrows = max(1, int(math.ceil(n / ncols)))
 
         if fig is None:
-            fig, axes = plt.subplots(nrows=1, ncols=self.wds.n_tanks, sharex=True, sharey=False, figsize=(9, 4.5))
+            fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False, figsize=(9, 4.5))
             axes = np.atleast_2d(axes).ravel()
         else:
             axes = fig.axes
@@ -44,19 +44,24 @@ class OptGraphs:
 
             axes[tank_idx].hlines(tank_data['min_vol'] * self.wds.flows_factor, 0, self.model.t, 'k', linewidth=1.5)
             axes[tank_idx].hlines(tank_data['max_vol'] * self.wds.flows_factor, 0, self.model.t, 'k', linewidth=1.5)
-            axes[tank_idx].hlines(tank_data['init_vol'] * self.wds.flows_factor, 0, self.model.t, 'k', linestyle='--')
+            axes[tank_idx].hlines(tank_data['init_vol'] * self.wds.flows_factor, 0, self.model.t, 'k', linestyle='--', zorder=20)
 
             y = np.hstack([init_vol, tank_data['init_vol'] * self.wds.flows_factor + inflow.cumsum(axis=-1)]).T
             axes[tank_idx].plot(y, color, alpha=self.alpha)
             # axes[tank_idx].scatter(0, tank_data['init_vol'] * self.wds.flows_factor, facecolor="none", edgecolor='r')
             axes[tank_idx].grid(True)
             if tank_titles:
-                axes[tank_idx].set_title(f'Tank: {tank_name}')
+                axes[tank_idx].set_title(f'Tank {tank_name}')
 
             if leg_label:
                 axes[tank_idx].plot(y[:, 0], color, label=leg_label)
                 axes[tank_idx].legend(framealpha=1)
 
+        for j in (n, nrows * ncols + 1):
+            try:
+                axes[j].axis('off')
+            except IndexError:
+                pass
         fig.subplots_adjust(left=0.105, bottom=0.15, top=0.95, right=0.92, wspace=0.2)
         return fig
 
@@ -87,11 +92,19 @@ class OptGraphs:
         return fig
 
     def plot_generators(self, shared_y=False, fig=None, color="C0", leg_label="", zo=1, gen_titles=True):
+        n = self.pds.n_generators
         if fig is None:
             ncols = max(1, math.ceil(math.sqrt(self.pds.n_generators)))
             nrows = max(1, int(math.ceil(self.pds.n_generators / ncols)))
             fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y, figsize=(9, 4))
             axes = np.atleast_2d(axes).ravel()
+
+            for j in (n, nrows * ncols + 1):
+                try:
+                    axes[j].axis('off')
+                except IndexError:
+                    pass
+
         else:
             axes = fig.axes
 
@@ -107,11 +120,11 @@ class OptGraphs:
             axes[i].yaxis.set_major_formatter(ScalarFormatter(useOffset=False))
             if leg_label:
                 axes[i].plot(p.T[:, 0], color, label=leg_label)
-                leg = axes[i].legend(framealpha=1, loc="upper left")
+                leg = axes[i].legend(framealpha=1)
                 leg.set_zorder(50)
 
             if gen_titles:
-                axes[i].set_title(f'Generator: {gen_idx + 1}')
+                axes[i].set_title(f'Generator {gen_idx + 1}')
 
         fig.text(0.5, 0.04, 'Time (hr)', ha='center')
         fig.text(0.02, 0.55, f'Generation ({self.pds.input_power_units.upper()})', va='center',
@@ -392,6 +405,9 @@ def analyze_latency(aro_path, thetas):
         ax.set_ylabel('WDS latency (hr)')
         ax.azim = -40
         ax.elev = 15
+
+    axes[0].text2D(0.05, 0.9, '(a)', transform=axes[0].transAxes, fontsize=14, fontweight='bold', va='top')
+    axes[1].text2D(0.05, 0.9, '(b)', transform=axes[1].transAxes, fontsize=14, fontweight='bold', va='top')
 
     axes[0].tick_params(axis='z', pad=6)
     axes[1].tick_params(axis='z', pad=1)
