@@ -479,6 +479,59 @@ def plot_advanced_por(experiment_path):
     fig2.subplots_adjust(left=0.13, right=0.97, top=0.96, bottom=0.12, hspace=0.06)
 
 
+def generate_scenarios(aro_path, n=1000, export_path=""):
+    """
+    Helper function to generate a file with scenarios for the adaptability analysis
+    The file contains nominal, worst-case, best-case, and two random scenarios
+    And also allow the user a convenient way to access and generate more the scenarios
+    :param aro_path: Not actually in use, just to configure the simulation instance
+    :param n: Size of a base sample to extract max value from
+    :param export_path: Where to export the generated scenarios
+    :return:
+    """
+    solution = utils.read_solution(sol_path=f"{aro_path}")
+    sim = Simulation(**solution, plot=False, n=n)
+    random_sample = sim.sample
+
+    demand_sample = sim.sample_dem.reshape(-1, sim.n_tanks, sim.n)  # [time, element_idx, sample_idx]
+    loads_sample = sim.sample_loads.reshape(-1, sim.n_bus, sim.n)  # [time, element_idx, sample_idx]
+    pv_sample = sim.sample_pv.reshape(-1, sim.n_bus, sim.n)  # [time, element_idx, sample_idx]
+
+    def min_max_normalize(matrix):
+        min_val = np.min(matrix)
+        max_val = np.max(matrix)
+        if max_val == min_val:  # Avoid division by zero if all values are the same
+            return np.zeros_like(matrix, dtype=float)
+        normalized_matrix = (matrix - min_val) / (max_val - min_val)
+        return normalized_matrix
+
+    idx_max_scenario = np.argmax(np.sum(min_max_normalize(random_sample), axis=0))
+    idx_min_scenario = np.argmin(np.sum(min_max_normalize(random_sample), axis=0))
+
+    idx_max_scenario_dem = np.argmax(np.sum(demand_sample, axis=(0, 1)))
+    idx_max_scenario_load = np.argmax(np.sum(loads_sample, axis=(0, 1)))
+    idx_max_scenario_pv = np.argmax(np.sum(pv_sample, axis=(0, 1)))
+
+    nominal_pv = (np.multiply(sim.pds.bus['max_pv_pu'].values, sim.pds.max_gen_profile.values[:, :sim.t].T))
+    nominal_dem = sim.wds.demands.values[:sim.t, :]
+    nominal_loads = sim.pds.dem_active.values[:, :sim.t].T
+
+    nominal = np.hstack([nominal_loads.flatten('F'), nominal_pv.flatten('F'), nominal_dem.flatten('F')])
+    max_sample = random_sample[:, idx_max_scenario]
+    min_sample = random_sample[:, idx_min_scenario]
+    np.random.seed = 42
+    rand_1 = random_sample[:, np.random.randint(low=0, high=n)]
+    rand_2 = random_sample[:, np.random.randint(low=0, high=n)]
+    df = pd.DataFrame({"Nominal": nominal,
+                       'Max Total': max_sample, 'Min Total': min_sample,
+                       'Max Load': random_sample[:, idx_max_scenario_load],
+                       'Max PV': random_sample[:, idx_max_scenario_pv],
+                       'Max Demand': random_sample[:, idx_max_scenario_dem],
+                       'Random1': rand_1, 'Random2': rand_2})
+    if export_path:
+        df.to_csv(export_path, index=False)
+
+
         costs, violations_rate = sim.run()
 
 
@@ -510,4 +563,6 @@ if __name__ == "__main__":
     plot_ro_vs_aro("output/I_sa_dep_bat_ro", aro_path="output/I_sa_dep_bat_aro",
                    thetas=[1])
 
-    plt.show()
+    plt.show()    generate_scenarios(aro_path="output/III_aro/III_ieee14-national-wds_aro_1.pkl",
+                       export_path="output/III_aro_adaptability_scenarios.csv")
+
