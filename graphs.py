@@ -1,3 +1,4 @@
+import os
 import math
 import numpy as np
 import matplotlib as mpl
@@ -5,7 +6,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import ticker as mtick
 from matplotlib.ticker import ScalarFormatter, AutoLocator, Locator, MaxNLocator
+import matplotlib.lines as mlines
+from matplotlib.collections import LineCollection
+import matplotlib.colors as mcolors
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+import utils
+from simulation import Simulation
 
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
@@ -24,13 +31,13 @@ class OptGraphs:
         self.x = x
         self.alpha = 0.3
 
-    def tanks_volume(self, fig=None, color='C0', leg_label="", tank_titles=True):
+    def tanks_volume(self, fig=None, color='C0', leg_label="", tank_titles=True, shared_y=False):
         n = self.wds.n_tanks
         ncols = max(1, int(math.ceil(math.sqrt(n))))
         nrows = max(1, int(math.ceil(n / ncols)))
 
         if fig is None:
-            fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=False, figsize=(9, 4.5))
+            fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y, figsize=(9, 4.5))
             axes = np.atleast_2d(axes).ravel()
         else:
             axes = fig.axes
@@ -91,7 +98,9 @@ class OptGraphs:
             axes[bat_idx].grid()
         return fig
 
-    def plot_generators(self, shared_y=False, fig=None, color="C0", leg_label="", zo=1, gen_titles=True):
+    def plot_generators(self, shared_y=False, fig=None, color="C0", leg_label="",
+                        # arguments for customization
+                        zo=1, gen_titles=True, shared_labels=False, skip_axes=None):
         n = self.pds.n_generators
         if fig is None:
             ncols = max(1, math.ceil(math.sqrt(self.pds.n_generators)))
@@ -99,17 +108,24 @@ class OptGraphs:
             fig, axes = plt.subplots(nrows=nrows, ncols=ncols, sharex=True, sharey=shared_y, figsize=(9, 4))
             axes = np.atleast_2d(axes).ravel()
 
-            for j in (n, nrows * ncols + 1):
-                try:
-                    axes[j].axis('off')
-                except IndexError:
-                    pass
+            if skip_axes is not None:
+                axes[skip_axes].axis('off')
+            else:
+                for j in (n, nrows * ncols + 1):
+                    try:
+                        axes[j].axis('off')
+                    except IndexError:
+                        pass
 
         else:
             axes = fig.axes
 
         for i, (gen_idx, gen_data) in enumerate(self.pds.generators.iterrows()):
             p = self.x[:, self.model.n_bus + i] * self.pds.pu_to_mw
+
+            if skip_axes is not None and i >= skip_axes:
+                i += 1
+
             axes[i].plot(p.T, color, alpha=0.6, zorder=zo)
             axes[i].set_axisbelow(True)
             axes[i].grid(True, zorder=0)
@@ -126,9 +142,10 @@ class OptGraphs:
             if gen_titles:
                 axes[i].set_title(f'Generator {gen_idx + 1}')
 
-        fig.text(0.5, 0.04, 'Time (hr)', ha='center')
-        fig.text(0.02, 0.55, f'Generation ({self.pds.input_power_units.upper()})', va='center',
-                 rotation='vertical')
+        if shared_labels:
+            fig.text(0.5, 0.04, 'Time (hr)', ha='center')
+            fig.text(0.02, 0.55, f'Generation ({self.pds.input_power_units.upper()})', va='center',
+                     rotation='vertical')
 
         fig.subplots_adjust(left=0.1, bottom=0.15, top=0.9, right=0.92, wspace=0.2)
         return fig
@@ -522,7 +539,7 @@ def analyze_latency(aro_path, thetas):
     for ax in axes:
         ax.zaxis.set_rotate_label(False)  # disable automatic rotation
         ax.set_xlabel('PDS Latency (hr)')
-        ax.set_ylabel('WDS latency (hr)')
+        ax.set_ylabel('WDS Latency (hr)')
         ax.azim = -40
         ax.elev = 15
 
