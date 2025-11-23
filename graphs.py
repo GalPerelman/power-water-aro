@@ -313,6 +313,126 @@ def por(ro_results="", aro_results=""):
     ax.legend(loc="lower right")
 
 
+def advanced_por(experiment_name, ro_solution_dir, aro_solution_dir, ro_thetas_for_hist, aro_thetas_for_hist,
+                 y_scale_param=0.01):
+    ro = pd.DataFrame()
+    aro = pd.DataFrame()
+    thetas = [0.5, 1, 1.5, 2, 2.5, 3]
+
+    fig, ax = plt.subplots()
+    fig2, axes2 = plt.subplots(nrows=2, ncols=1, sharex=True)
+    axes2 = axes2.ravel()
+    for i, theta in enumerate(thetas):
+        try:
+            solution = utils.read_solution(sol_path=os.path.join(aro_solution_dir, f"{experiment_name}_aro_{theta}.pkl"))
+        except FileNotFoundError as e:
+            print(e)
+            continue
+        sim = Simulation(**solution, plot=False)
+        costs, violations_rate = sim.run()
+        aro = pd.concat([aro, pd.DataFrame({"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
+                                            "solver_obj": solution["solver_obj"], "violations_rate": violations_rate,
+                                            "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat, 'costs': [costs]},
+                                           index=[len(aro)])])
+
+        try:
+            solution = utils.read_solution(sol_path=os.path.join(ro_solution_dir, f"{experiment_name}_ro_{theta}.pkl"))
+        except FileNotFoundError as e:
+            print(e)
+            continue
+        sim = Simulation(**solution, plot=False)
+        costs, violations_rate = sim.run()
+        ro = pd.concat([ro, pd.DataFrame({"theta": theta, "avg_cost": costs.mean(), "max_cost": costs.max(),
+                                          "solver_obj": solution["solver_obj"], "violations_rate": violations_rate,
+                                          "pds_lat": sim.pds_lat, "wds_lat": sim.wds_lat, 'costs': [costs]},
+                                         index=[len(ro)])])
+
+    ro["reliability"] = 1 - ro["violations_rate"]
+    aro["reliability"] = 1 - aro["violations_rate"]
+
+    ax_max = 1.15
+    hist_ax_max = 800
+    x1, x2 = ro['reliability'].min(), ax_max
+    y1, y2 = y_scale_param * hist_ax_max, hist_ax_max
+    m = (y2 - y1) / (x2 - x1)
+
+    ax2 = ax.twinx()
+    ax.set_zorder(ax2.get_zorder() + 1)  # Makes ax on top of ax2
+    ax.patch.set_visible(False)
+
+    ro_ax2 = axes2[0].twinx()
+    aro_ax2 = axes2[1].twinx()
+    axes2[0].set_zorder(ro_ax2.get_zorder() + 1)  # Makes ax on top of ax2
+    axes2[0].patch.set_visible(False)
+    axes2[1].set_zorder(aro_ax2.get_zorder() + 1)  # Makes ax on top of ax2
+    axes2[1].patch.set_visible(False)
+
+    for i, theta in enumerate(aro_thetas_for_hist):
+        c = aro.loc[aro['theta'] == theta, 'costs'].values[0]
+        r = aro.loc[aro['theta'] == theta, 'reliability'].values[0]
+        counts, bins = np.histogram(c, bins=30)
+        ax2.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5, zorder=1,
+                bottom=m * (r - x1) + y1)
+        label = 'ARO Costs' if i == 0 else '_nolegend_'
+        aro_ax2.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5, zorder=1,
+                    bottom=m * (r - x1) + y1, label=label)
+
+    for i, theta in enumerate(ro_thetas_for_hist):
+        c = ro.loc[ro['theta'] == theta, 'costs'].values[0]
+        r = ro.loc[ro['theta'] == theta, 'reliability'].values[0]
+        counts, bins = np.histogram(c, bins=30)
+        label = 'RO Costs' if i == 0 else '_nolegend_'
+        ro_ax2.bar(bins[:-1], counts, width=np.diff(bins), color='lightgrey', edgecolor='k', alpha=0.5, zorder=1,
+                   bottom=m * (r - x1) + y1, label=label)
+
+    def customized_plot(ax, x, y, label, color):
+        ax.plot(x, y, label=label, marker='o', zorder=10, c=color, mfc="w")
+        return ax
+
+    ax = customized_plot(ax, aro['avg_cost'], aro['reliability'], label='ARO-AVG', color=COLORS["ARO-AVG"])
+    ax = customized_plot(ax, ro['avg_cost'], ro['reliability'], label='RO-AVG', color=COLORS["RO-AVG"])
+    ax = customized_plot(ax, ro['max_cost'], ro['reliability'], label='RO-MAX', color=COLORS["RO-MAX"])
+    ax2.set_ylim(0, hist_ax_max)
+    ax2.set_yticks([])
+    ax.set_ylim(0.9 * ro['reliability'].min(), ax_max)
+    ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
+
+    axes2[0] = customized_plot(axes2[0], ro['avg_cost'], ro['reliability'], label='RO-AVG', color=COLORS["RO-MAX"])
+    axes2[1] = customized_plot(axes2[1], aro['avg_cost'], aro['reliability'], label='ARO-AVG', color=COLORS["ARO-AVG"])
+    ro_ax2.set_ylim(0, hist_ax_max)
+    ro_ax2.set_yticks([])
+    aro_ax2.set_ylim(0, hist_ax_max)
+    aro_ax2.set_yticks([])
+
+    min_y = 0.85 * ro['reliability'].min() if 0.85 * ro['reliability'].min() > 0 else -0.02
+    axes2[0].set_ylim(min_y, ax_max)
+    axes2[1].set_ylim(min_y, ax_max)
+    axes2[0].yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
+    axes2[1].yaxis.set_major_formatter(mtick.PercentFormatter(1.0, decimals=0))
+
+    axes2[0].set_axisbelow(True)
+    axes2[1].set_axisbelow(True)
+    axes2[0].grid(color='gray', linewidth=0.5, linestyle='--', alpha=0.7)
+    axes2[1].grid(color='gray', linewidth=0.5, linestyle='--', alpha=0.7)
+
+    h1, lb1 = ro_ax2.get_legend_handles_labels()
+    h2, lb2 = axes2[0].get_legend_handles_labels()
+    axes2[0].legend(h1 + h2, lb1 + lb2, loc='lower right')
+    h1, lb1 = aro_ax2.get_legend_handles_labels()
+    h2, lb2 = axes2[1].get_legend_handles_labels()
+    axes2[1].legend(h1 + h2, lb1 + lb2, loc='lower right')
+
+    ax.set_xlabel("Cost ($)")
+    ax.set_ylabel("CSR (%)")
+    ax.legend(loc='lower right')
+
+    fig2.text(0.55, 0.03, 'Cost ($)', ha='center')
+    fig2.text(0.025, 0.5, f'CSR (%)', va='center', rotation='vertical')
+
+    fig.subplots_adjust(hspace=0, left=0.15, right=0.95, top=0.92, bottom=0.14)
+    fig2.subplots_adjust(left=0.13, right=0.97, top=0.96, bottom=0.12, hspace=0.06)
+
+
 def analyze_latency(aro_path, thetas):
     from scipy.interpolate import griddata
     df = pd.read_csv(aro_path, index_col=0)
