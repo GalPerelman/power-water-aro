@@ -563,6 +563,5 @@ if __name__ == "__main__":
     plot_ro_vs_aro("output/I_sa_dep_bat_ro", aro_path="output/I_sa_dep_bat_aro",
                    thetas=[1])
 
-    plt.show()    generate_scenarios(aro_path="output/III_aro/III_ieee14-national-wds_aro_1.pkl",
+    generate_scenarios(aro_path="output/III_aro/III_ieee14-national-wds_aro_1.pkl",
                        export_path="output/III_aro_adaptability_scenarios.csv")
-
