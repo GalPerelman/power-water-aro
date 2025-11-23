@@ -593,6 +593,221 @@ def plot_nonanticipative_matrix():
     fig.subplots_adjust(wspace=0.1)
 
 
+def parallel_coord(aro_path, ro_path, n):
+    def preprocess(path):
+        aro_solution = utils.read_solution(sol_path=f"{path}")
+        sim = Simulation(**aro_solution, plot=False, n=n)
+        costs, violations_rate = sim.run()
+
+        p = sim.x_by_sample[:, sim.n_bus: sim.n_bus + sim.n_gen] * sim.pds.pu_to_mw
+        ramp = np.diff(p, axis=2)  # shape: (n_sample, n_generators, time_steps-1)
+        avg_ramp = np.mean(np.abs(ramp), axis=(1, 2))  # average across all generators & time
+        max_ramp = np.max(np.abs(ramp), axis=(1, 2))  # max absolute ramp across all generators & time
+
+        desal_idx = [sim.n_pds + sim.n_combs + _ for _ in range(sim.n_desal)]
+        combs_idx = [sim.n_pds + _ for _ in range(sim.n_combs)]
+        combs_power = sim.wds.combs['total_power'].values
+        combs_power = combs_power.reshape(1, len(combs_power), 1)
+
+        combs_flow = sim.wds.combs['flow'].values
+        combs_flow = combs_flow.reshape(1, len(combs_flow), 1)
+        pumps_power = sim.x_by_sample[:, combs_idx, :] * combs_power * sim.wds_power_units_factor
+        pumps_flow = sim.x_by_sample[:, combs_idx, :] * combs_flow * sim.wds.flows_factor
+
+        desal_power = sim.x_by_sample[:, desal_idx, :] * sim.wds.desal_power * sim.wds_power_units_factor
+        desal_flow = sim.x_by_sample[:, desal_idx, :] * sim.wds.flows_factor
+
+        total_wds_power = (pumps_power.sum(axis=(1, 2)) + desal_power.sum(axis=(1, 2))) * 1000  # in kW
+        total_wds_flow = pumps_flow.sum(axis=(1, 2)) + desal_flow.sum(axis=(1, 2))
+        se = np.divide(total_wds_power, total_wds_flow)
+
+        wds_pumping_stations = sim.wds.combs['station'].unique()
+        station_flows = np.empty(shape=(pumps_flow.shape[0], len(wds_pumping_stations), pumps_flow.shape[2]))
+        for i, station_name in enumerate(wds_pumping_stations):
+            station_idx = sim.wds.combs.loc[sim.wds.combs['station'] == station_name].index
+            station_flows[:, i, :] = pumps_flow[:, station_idx, :].sum(axis=1)
+        flow_std_per_scenario = np.std(station_flows, axis=2).mean(axis=1)  # std over time, mean over pumps
+
+        power_units = sim.pds.input_power_units.upper()
+        df = pd.DataFrame({"Cost\n($)": costs, f"Avg Generator\nRamping ({power_units})": avg_ramp,
+                           f"Max Generator\nRamping ({power_units})": max_ramp,
+                           f"Total Generators\nViolated Dispatch ({power_units}h)": sim.violation_dispatch.sum(axis=1),
+                           # 'Specific Energy': se,
+                           "Total violated\nwater volume ($m^3$)": sim.violation_volume.sum(axis=1),
+                           "Pump Stations\nFlow STD ($m^3/hr$)": flow_std_per_scenario})
+        return df
+
+    df_aro = preprocess(aro_path)
+    df_ro = preprocess(ro_path)
+
+    ro_color: str = COLORS["RO-MAX"]
+    aro_color: str = COLORS["ARO-AVG"]
+    linewidth: float = 1.0
+    height: int = 5
+    width_per_axis: float = 2.2
+    tick_fontsize: int = 10
+    label_fontsize: int = 11
+    show_medians: bool = False
+    median_linewidth: float = 2.5
+    median_alpha: float = 0.9
+
+    metrics = list(df_aro.columns)
+    all_df = pd.concat([df_aro[metrics], df_ro[metrics]], axis=0)
+    mins = all_df.min(skipna=True)
+    maxs = all_df.max(skipna=True)
+
+    ranges = {}
+    for m in metrics:
+        lo, hi = float(mins[m]), float(maxs[m])
+        if not np.isfinite(lo) or not np.isfinite(hi):
+            lo, hi = 0.0, 1.0
+        if hi == lo:
+            hi = lo + 1.0  # widen by 1 to avoid divide-by-zero
+        ranges[m] = (lo, hi)
+
+    def normalize_block(df_block):
+        vals = df_block[metrics].astype(float).copy()
+        for m in metrics:
+            lo, hi = ranges[m]
+            vals[m] = (vals[m] - lo) / (hi - lo)
+        return vals
+
+    vals_aro = normalize_block(df_aro)
+    vals_ro = normalize_block(df_ro)
+
+    k = len(metrics)
+    x = np.arange(k)  # x-locations of vertical axes
+
+    fig_w = max(6.0, width_per_axis * k)
+    fig, ax = plt.subplots(figsize=(fig_w, height))
+
+    # Helper to add a group of lines efficiently
+    def add_group_lines(ax, yvals: pd.DataFrame, color: str, alpha: float, lw: float, label):
+        # Build segments for a LineCollection: each row becomes a polyline across axes
+        segs = []
+        for _, row in yvals.iterrows():
+            segs.append(np.column_stack([x, row.values.astype(float)]))
+        lc = LineCollection(segs, colors=color, linewidths=lw, alpha=alpha, zorder=1, label=label)
+        ax.add_collection(lc)
+
+    def _alphas_from_first_metric(df, metrics,  alpha_min=0.05, alpha_max=0.08, robust=None):
+        """
+        Compute per-row alphas from the first metric in `metrics` for ONE group (df).
+        Lower value -> higher alpha (darker).
+        """
+        first = metrics[0]
+        vals = df[first].values.astype(float)
+
+        # handle robust clipping if requested
+        if robust is not None:
+            lo_p, hi_p = robust
+            lo = np.nanpercentile(vals, lo_p)
+            hi = np.nanpercentile(vals, hi_p)
+        else:
+            lo = np.nanmin(vals)
+            hi = np.nanmax(vals)
+
+        # guard against degenerate ranges
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+            return np.full(vals.shape[0], (alpha_min + alpha_max) / 2.0, dtype=float)
+
+        # normalize within group: best (min) -> 1, worst (max) -> 0
+        norm = (vals - lo) / (hi - lo)
+        inv = 1.0 - norm
+        return alpha_min + inv * (alpha_max - alpha_min)
+
+    def add_group_lines_with_opacity(ax, yvals, x_positions, base_color, alphas, lw):
+        """Add a LineCollection where each polyline shares RGB but has its own alpha."""
+        rgb = mcolors.to_rgb(base_color)
+        segs = [np.column_stack([x_positions, row.values.astype(float)])
+                for _, row in yvals.iterrows()]
+        # build per-line RGBA list
+        colors = [(*rgb, float(a)) for a in alphas]
+        lc = LineCollection(segs, colors=colors, linewidths=lw, zorder=1)
+        ax.add_collection(lc)
+        return lc  # in case you want lc.legend_elements(), etc.
+
+    alphas_ro = _alphas_from_first_metric(df_ro, metrics, alpha_min=0.05, alpha_max=0.8, robust=None)
+    alphas_aro = _alphas_from_first_metric(df_aro, metrics, alpha_min=0.05, alpha_max=0.8, robust=None)
+    lc_ro = add_group_lines_with_opacity(ax, vals_ro, x, ro_color, alphas_ro, linewidth)
+    lc_aro = add_group_lines_with_opacity(ax, vals_aro, x, aro_color, alphas_aro, linewidth)
+
+    # if len(vals_ro) > 0:
+    #     add_group_lines(ax, vals_ro, ro_color, ro_alpha, linewidth, label="RO")
+    # if len(vals_aro) > 0:
+    #     add_group_lines(ax, vals_aro, aro_color, aro_alpha, linewidth, label="ARO")
+
+    # Optional: median lines per group for emphasis
+    if show_medians:
+        if len(vals_ro) > 0:
+            med_ro = vals_ro.median(axis=0).values.astype(float)
+            ax.plot(x, med_ro, color=ro_color, lw=median_linewidth,
+                    alpha=median_alpha, zorder=3, label="RO (median)")
+        if len(vals_aro) > 0:
+            med_aro = vals_aro.median(axis=0).values.astype(float)
+            ax.plot(x, med_aro, color=aro_color, lw=median_linewidth,
+                    alpha=median_alpha, zorder=3, label="ARO (median)")
+
+    ax.set_xlim(x[0], x[-1])
+    ax.set_ylim(0, 1)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics, fontsize=label_fontsize)
+
+    # Hide the default y-axis (we’ll annotate per-dimension scales instead)
+    ax.yaxis.set_visible(False)
+    ax.grid(False)
+
+    # Vertical axes + tick labels per dimension
+    for i, m in enumerate(metrics):
+        lo, hi = ranges[m]
+
+        # draw the vertical axis line
+        ax.plot([i, i], [0, 1], color="#AAAAAA", lw=1.4, zorder=0)
+
+        # choose ~5 ticks for each axis in real units
+        ticks_real = np.linspace(lo, hi, 5)
+        ticks_norm = (ticks_real - lo) / (hi - lo)
+
+        # draw ticks and labels
+        bbox = dict(boxstyle="round", ec="none", fc="white", alpha=0.3)
+        for j, (t_real, t_norm) in enumerate(zip(ticks_real, ticks_norm)):
+            if j == 0:
+                va = "bottom"
+                t_norm *= 1.2
+            elif j == len(ticks_real) - 1:
+                va = "top"
+                t_norm *= 0.98
+            else:
+                va = "center"
+            ax.plot([i - 0.03, i + 0.03], [t_norm, t_norm], color="#777777", lw=1)
+            if m == "Cost\n($)":
+                ax.text(i - 0.05, t_norm, f"{t_real:.0f}", va=va, ha="right", fontsize=tick_fontsize, bbox=bbox)
+            else:
+                ax.text(i - 0.05, t_norm, f"{t_real:.1f}", va=va, ha="right", fontsize=tick_fontsize, bbox=bbox)
+
+        # top/bottom labels for min/max (bolder)
+        # ax.text(i - 0.05, 0.0, f"{lo:.3g}", va="center", ha="right",
+        #         fontsize=tick_fontsize, fontweight="bold")
+        # ax.text(i - 0.05, 1.0, f"{hi:.3g}", va="center", ha="right",
+        #         fontsize=tick_fontsize, fontweight="bold")
+
+    ro_line = mlines.Line2D([], [], color=ro_color, label='RO', linewidth=2.5)
+    aro_line = mlines.Line2D([], [], color=aro_color, label='ARO', linewidth=2.5)
+    ax.legend(handles=[ro_line, aro_line], loc="upper left")
+
+    bbox = dict(facecolor='white', alpha=0.6, edgecolor='none', boxstyle='round,pad=0.5')
+    ax.text(0.15, 0.1, 'Lower is\nbetter', fontsize=12, va='center', ha='left', bbox=bbox)
+    ax.annotate(
+        '',
+        xy=(0.1, 0.02), xytext=(0.1, 0.15),
+        arrowprops=dict(arrowstyle='->,head_length=1,head_width=0.36', lw=2.5, color='black'))
+    # ax.annotate('', xy=(0.1, 0.02), xytext=(0.1, 0.15),
+    #             arrowprops=dict(arrowstyle='simple', lw=2.5, color='black'))
+
+    plt.tight_layout()
+    return fig, ax
+
+
 if __name__ == "__main__":
     plot_nonanticipative_matrix()
     plt.show()
