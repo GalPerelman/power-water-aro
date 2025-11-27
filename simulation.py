@@ -167,27 +167,11 @@ class Simulation(opt.RobustModel):
                                      + np.sum(np.maximum(0, vol - tank_ub), axis=1))
 
             self.violation_counts[tank_name] = tank_violations
-            self.violation_volume[tank_name] = total_violated_volume
-            self.total_violation_volume[tank_name] = [total_violated_volume.sum()]
-            """
-            for case study I_3-bus_desalination_wds_aro:
-            Desalination power = 3000 kw = 3 mw
-            T1 average power for pumping = 0 water are supplied from the desalination plant
-            T2 average power for pumping = 1300 kw = 1.3 mw
-            total power (mw/m^3): T1=3, T2=4.3
-            power cost by average of two generators
-            gen_avg_power = 0.5 * (gen_min + gen_max) = 0.5 * (10 + 300) = 155 fpr both generators
-            average cost = a * gen_avg_power ^ 2 + b * gen_avg_power + c
-            average specific cost: gen1 = 3567.75 / 155 = 23, gen2 = 2828 / 155 = 18.24
-            price per mw = 0.5 * (23 + 18.24) = 20.63
-            price per m^3: T1 = 20.63 * 3 = 61.89, T2 = 20.63 * 4.3 = 88.71
-            """
-            penalty_cost = {'T1': 61.89, 'T2': 88.71}
-            tank_shortage = vol - tank_lb
-            tank_shortage[tank_shortage >= 0] = 0
-            tank_surplus = tank_ub - vol
-            tank_surplus[tank_surplus >= 0] = 0
-            self.violations_penalty[tank_name] = (-tank_shortage.sum()) * penalty_cost[tank_name] * 1.2
+            self.violation_volume[tank_name] = total_violated_volume * self.wds.flows_factor
+            self.total_violation_volume[tank_name] = [total_violated_volume.sum() * self.wds.flows_factor]
+
+            # price per missing/excess m^3: desalination power (3 MW) * 50 $/MW * 1.2 (penalty)
+            self.violations_penalty[tank_name] = self.total_violation_volume[tank_name].sum() * 3 * 50 * 1.2
 
     def calculate_soc(self):
         ncols = max(1, int(math.ceil(math.sqrt(self.pds.n_batteries))))
