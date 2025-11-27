@@ -457,36 +457,36 @@ def plot_ro_vs_aro(ro_path, aro_path, thetas, n, method_in_front="aro", shared_y
 
 
 def analyze_adaptability(
-    ro_path,
-    aro_path,
-    scenarios_path,
-    scenario_names,
-    parameters_to_plot,
-    *,  # All arguments after this must be passed by name (keyword arguments), not by position.
+        ro_path,
+        aro_path,
+        scenarios_path,
+        scenario_names,
+        parameters_to_plot,
+        *,  # All arguments after this must be passed by name (keyword arguments), not by position.
 
-    # ---- Selection controls ----
-    include_generators="all",      # "all" | list of generator indices (as in sim.pds.generators index)
-    include_tanks="all",           # "all" | list of tank names (keys of sim.solution["tanks"])
-    include_batteries="all",       # "all" | list of battery names (keys of sim.solution["batteries"])
-    include_stations="all",        # "all" | list of station names (sim.wds.combs['station'].unique())
-    include_desal="all",           # "all" | list of desal names (sim.wds.desal.index or .name)
-    include_params="auto",         # "auto" (=parameters_to_plot) | explicit list like ["load", "pv", "demand"]
+        # ---- Selection controls ----
+        include_generators="all",  # "all" | list of generator indices (as in sim.pds.generators index)
+        include_tanks="all",  # "all" | list of tank names (keys of sim.solution["tanks"])
+        include_batteries="all",  # "all" | list of battery names (keys of sim.solution["batteries"])
+        include_stations="all",  # "all" | list of station names (sim.wds.combs['station'].unique())
+        include_desal="all",  # "all" | list of desal names (sim.wds.desal.index or .name)
+        include_params="auto",  # "auto" (=parameters_to_plot) | explicit list like ["load", "pv", "demand"]
 
-    # ---- Layout controls ----
-    ncols=None,                    # None => auto sqrt; otherwise fixed number of columns
-    sharex=True,
-    figsize=(14, 8),
-    group_rows=True,  # if True, each type gets its own row block (params / gens / tanks / bats / stations / desal)
-    type_order=("params", "generators", "batteries", "stations", "desal", "tanks"),
-    # ---- Styling / legend ----
-    legend=True,
-    legend_fontsize=10,
-    legend_loc="center left",
-    legend_ncols=1,
-    # ---- RO overlay controls ----
-    show_ro_for=("generators", "tanks", "batteries", "stations", "desal", "params"),  # any subset of types
-    ro_line_kwargs=None,           # dict for RO line style, e.g. {"color":"k","lw":1.8,"alpha":0.9}
-    scenario_line_kwargs=None,     # base kwargs for scenario lines (applied in addition to label)
+        # ---- Layout controls ----
+        ncols=None,  # None => auto sqrt; otherwise fixed number of columns
+        sharex=True,
+        figsize=(14, 8),
+        group_rows=True,  # if True, each type gets its own row block (params / gens / tanks / bats / stations / desal)
+        type_order=("params", "generators", "batteries", "stations", "desal", "tanks"),
+        # ---- Styling / legend ----
+        legend=True,
+        legend_fontsize=10,
+        legend_loc="center left",
+        legend_ncols=1,
+        # ---- RO overlay controls ----
+        show_ro_for=("generators", "tanks", "batteries", "stations", "desal", "params"),  # any subset of types
+        ro_line_kwargs=None,  # dict for RO line style, e.g. {"color":"k","lw":1.8,"alpha":0.9}
+        scenario_line_kwargs=None,  # base kwargs for scenario lines (applied in addition to label)
 ):
     """
     Flexible, grid-based adaptability plotter for ARO vs. scenarios with optional RO overlays.
@@ -638,7 +638,7 @@ def analyze_adaptability(
             pos = list(sim.pds.generators.index).index(gen_idx)
             p = sim.x_by_sample[:, sim.n_bus + pos] * sim.pds.pu_to_mw
             ax.plot(p.T, label=s_name, **scenario_line_kwargs[s_name])
-            _style_axis(ax, f'Generator {gen_idx+1}', f'Power ({sim.pds.input_power_units.upper()})')
+            _style_axis(ax, f'Generator {gen_idx + 1}', f'Power ({sim.pds.input_power_units.upper()})')
 
         # Batteries
         for j, bat_name in enumerate(bat_names):
@@ -807,26 +807,52 @@ def analyze_adaptability(
 if __name__ == "__main__":
     computational_analysis()
 
+    graphs.advanced_por(experiment_name="I_3-bus-desalination-wds",
+                        ro_solution_dir="output/I_ro",
+                        aro_solution_dir="output/I_aro",
+                        ro_thetas_for_hist=[0.5, 1, 1.5, 3],
+                        aro_thetas_for_hist=[0.5, 1, 1.5, 3],
+                        y_scale_param=0.1)
+
+    graphs.advanced_por(experiment_name="II_ieee9-national-wds",
+                        ro_solution_dir="output/II_ro",
+                        aro_solution_dir="output/II_aro",
+                        ro_thetas_for_hist=[0.5, 1, 1.5, 3],
+                        aro_thetas_for_hist=[0.5, 1, 1.5, 3],
+                        y_scale_param=0.03)
+
+    graphs.advanced_por(experiment_name="III_ieee14-national-wds",
+                        ro_solution_dir="output/III_ro",
+                        aro_solution_dir="output/III_aro",
+                        ro_thetas_for_hist=[0.5, 1, 1.5, 3],
+                        aro_thetas_for_hist=[0.5, 1, 3],
+                        y_scale_param=0.01)
+
+    graphs.advanced_por(experiment_name="IV_ieee24-national-wds",
+                        ro_solution_dir="output/IV_ro",
+                        aro_solution_dir="output/IV_aro",
+                        ro_thetas_for_hist=[0.5, 1, 1.5, 2.5],
+                        aro_thetas_for_hist=[0.5, 1, 1.5, 3])
+
     ##############################   plot operational results   ##############################
     plot_ro_vs_aro("output/I_ro/I_3-bus-desalination-wds_ro",
                    aro_path="output/I_aro/I_3-bus-desalination-wds_aro", thetas=[1], n=500)  # n=100 for generators
     plot_ro_vs_aro("output/I_ro_sa/I_sa_dep_bat_ro", aro_path="output/I_aro_sa/I_sa_dep_bat_aro",
                    thetas=[1], n=500, method_in_front="aro")  # n=100 for generators
     plot_ro_vs_aro("output/III_ro/III_ieee14-national-wds_ro",
-                    aro_path="output/III_aro/III_ieee14-national-wds_aro",
-                    thetas=[1], n=500, shared_y=False, case_name="III")
+                   aro_path="output/III_aro/III_ieee14-national-wds_aro",
+                   thetas=[1], n=500, shared_y=False, case_name="III")
 
     ##############################   latency analysis plot   ##############################
     graphs.analyze_latency(aro_path="output/III_aro/III_ieee14-national-wds_aro_por.csv", thetas=[1])
-
 
     ##############################   adaptability analysis plot   ##############################
     fig, ax_map = analyze_adaptability(
         ro_path="output/III_ro/III_ieee14-national-wds_ro_1.pkl",
         aro_path="output/III_aro/III_ieee14-national-wds_aro_1.pkl",
         scenarios_path="output/III_aro/III_aro_adaptability_scenarios.csv",
-        scenario_names=["High Load Start at 12", "High Demand", "Nominal"],  # order will determine the zorder, last is on top
-        parameters_to_plot=["load", "demand"],
+        scenario_names=["High Load Start at 12", "High Demand", "Nominal"],
+        parameters_to_plot=["load", "demand"], # order will determine the zorder, last is on top
         include_generators="all",
         include_tanks="all",
         include_batteries=[],
@@ -835,9 +861,17 @@ if __name__ == "__main__":
         group_rows=True,
         show_ro_for=(),
         scenario_line_kwargs={"High Load Start at 12": {"color": "C1", "lw": 3, "alpha": 0.8},
-                              "High Demand": {"color": "C0", "lw": 3, "alpha": 0.8},#053e7a, #f1be04
+                              "High Demand": {"color": "C0", "lw": 3, "alpha": 0.8},  # 053e7a, #f1be04
                               "Nominal": {"color": "k", "lw": 0.8}},
         ncols=4,
         legend_ncols=1,
         legend_loc="upper left"
     )
+
+    ##############################   Parallel Coordinates   ##############################
+    graphs.parallel_coord(aro_path="output/III_aro/III_ieee14-national-wds_aro_1.5.pkl",
+                          ro_path="output/III_ro/III_ieee14-national-wds_ro_1.5.pkl", n=500)
+    graphs.parallel_coord(aro_path="output/IV_aro/IV_ieee24-national-wds_aro_2.pkl",
+                          ro_path="output/IV_ro/IV_ieee24-national-wds_ro_2.pkl", n=500)
+
+    plt.show()

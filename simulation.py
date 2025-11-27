@@ -3,7 +3,12 @@ import os.path
 
 import matplotlib.pyplot as plt
 import scipy.stats
+from matplotlib import cm
 from matplotlib import ticker as mtick
+from matplotlib.collections import LineCollection
+import matplotlib.colors as mcolors
+import matplotlib.lines as mlines
+
 import numpy as np
 import pandas as pd
 
@@ -405,30 +410,22 @@ def generate_scenarios(aro_path, n=1000, export_path=""):
 if __name__ == "__main__":
     thetas = [0.5, 1, 1.5, 2, 2.5, 3]
 
-    # simulate and plot case study I
-    simulate_experiment("output/I_3-bus-desalination-wds_ro", thetas=thetas, export=True, plot=False)
-    simulate_experiment("output/I_3-bus-desalination-wds_aro", thetas=thetas, export=True, plot=False,
-                        analyze_lags=False, pds_latencies=None, wds_latencies=None)
-    graphs.por(ro_results="output/I_3-bus-desalination-wds_ro_por.csv",
-               aro_results="output/I_3-bus-desalination-wds_aro_por.csv")
-    plot_advanced_por("output/I_3-bus-desalination-wds")
+    ### simulate and plot case study I
+    simulate_experiment("output/I_ro/I_3-bus-desalination-wds_ro", thetas=[0] + thetas, export=True, plot=False)
+    simulate_experiment("output/I_aro/I_3-bus-desalination-wds_aro", thetas=thetas, export=True, plot=False)
 
-    # simulate and plot case study II
-    simulate_experiment("output/II_ieee9-national-wds_ro", thetas, export=True, plot=False)
-    simulate_experiment("output/II_ieee9-national-wds_aro", thetas, export=True, plot=False)
-    graphs.por(ro_results="output/II_ieee9-national-wds_ro_por.csv",
-               aro_results="output/II_ieee9-national-wds_aro_por.csv")
-    plot_advanced_por("output/II_ieee9-national-wds")
+    ### simulate and plot case study II (supplementary in the paper)
+    simulate_experiment("output/II_ro/II_ieee9-national-wds_ro", [0] + thetas, export=True, plot=False)
+    simulate_experiment("output/II_aro/II_ieee9-national-wds_aro", thetas, export=True, plot=False)
 
-    # latency analysis plot
-    graphs.analyze_latency(aro_path="output/I_3-bus-desalination-wds_aro_por.csv",
-                           ro_path="output/I_3-bus-desalination-wds_ro_por.csv")
+    ### simulate and plot case study III (case II in the paper)
+    simulate_experiment("output/III_ro/III_ieee14-national-wds_ro", thetas=[0] + thetas, export=True, plot=False)
+    simulate_experiment("output/III_aro/III_ieee14-national-wds_aro", thetas=thetas, export=True, plot=False,
+                        analyze_lags=True, pds_latencies=[0, 1, 2, 3, 4, 5], wds_latencies=[0, 1, 2, 3, 4, 5])
 
-    # plot decision space
-    plot_ro_vs_aro("output/I_3-bus-desalination-wds_ro", aro_path="output/I_3-bus-desalination-wds_aro",
-                   thetas=[1])
-    plot_ro_vs_aro("output/I_sa_dep_bat_ro", aro_path="output/I_sa_dep_bat_aro",
-                   thetas=[1])
+    # simulate and plot case study IV (supplementary in the paper)
+    simulate_experiment("output/IV_ro/IV_ieee24-national-wds_ro", thetas=[0] + thetas, export=True, plot=False)
+    simulate_experiment("output/IV_aro/IV_ieee24-national-wds_aro", thetas=thetas, export=True, plot=False)
 
     generate_scenarios(aro_path="output/III_aro/III_ieee14-national-wds_aro_1.pkl",
                        export_path="output/III_aro_adaptability_scenarios.csv")
